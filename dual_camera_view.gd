@@ -1,0 +1,664 @@
+class_name DualCameraView
+extends Node
+
+## Triple camera system showing FPS view, exterior view, and docking station interior view
+
+@export var character: CharacterController
+@export var vehicle: Vehicle
+@export var vehicle_container: VehicleContainer
+
+# Main FPS camera (interior/proxy view)
+var main_camera: Camera3D
+
+# External/God view camera (world space view)
+var external_camera: Camera3D
+
+# Docking station interior camera (fixed view inside container)
+var dock_interior_camera: Camera3D
+
+# Viewports
+var external_viewport: SubViewport
+var dock_interior_viewport: SubViewport
+
+# Display
+var external_rect: TextureRect
+var dock_interior_rect: TextureRect
+
+var mouse_sensitivity: float = 0.002
+var base_rotation: Vector3 = Vector3.ZERO
+var third_person_mode: bool = false
+var third_person_distance: float = 10.0
+
+func _ready() -> void:
+	_setup_viewports()
+	_setup_cameras()
+	_setup_display()
+
+	# Capture mouse for FPS controls
+	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+	# Force update viewport sizes after everything is ready
+	await get_tree().process_frame
+
+	# Set viewports to wireframe mode (needs to be after process_frame)
+	external_viewport.debug_draw = Viewport.DEBUG_DRAW_WIREFRAME
+	dock_interior_viewport.debug_draw = Viewport.DEBUG_DRAW_WIREFRAME
+
+	_update_viewport_sizes()
+
+	print("DualCameraView ready - PIP should be visible now")
+	print("External viewport wireframe: ", external_viewport.debug_draw == Viewport.DEBUG_DRAW_WIREFRAME)
+	print("Dock viewport wireframe: ", dock_interior_viewport.debug_draw == Viewport.DEBUG_DRAW_WIREFRAME)
+
+func _setup_viewports() -> void:
+	# External viewport (ship interior proxy space) - picture-in-picture bottom right
+	external_viewport = SubViewport.new()
+	external_viewport.size = Vector2i(640, 360)
+	external_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	external_viewport.transparent_bg = false
+
+	# Create SEPARATE World3D for ship interior proxy space
+	var ship_proxy_world = World3D.new()
+
+	# Create environment for ship proxy world
+	var ship_env = Environment.new()
+	ship_env.background_mode = Environment.BG_COLOR
+	ship_env.background_color = Color(0.1, 0.1, 0.1)
+	ship_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	ship_env.ambient_light_color = Color(1, 1, 1)
+	ship_env.ambient_light_energy = 1.0
+	ship_proxy_world.environment = ship_env
+
+	external_viewport.world_3d = ship_proxy_world
+
+	# Create visual geometry for ship interior proxy space
+	_create_proxy_interior_scene(external_viewport)
+
+	add_child(external_viewport)
+
+	# Dock interior viewport (station interior proxy space) - picture-in-picture top right
+	dock_interior_viewport = SubViewport.new()
+	dock_interior_viewport.size = Vector2i(640, 360)
+	dock_interior_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	dock_interior_viewport.transparent_bg = false
+
+	# Create SEPARATE World3D for station interior proxy space
+	var station_proxy_world = World3D.new()
+
+	# Create environment for station proxy world
+	var station_env = Environment.new()
+	station_env.background_mode = Environment.BG_COLOR
+	station_env.background_color = Color(0.1, 0.1, 0.1)
+	station_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	station_env.ambient_light_color = Color(1, 1, 1)
+	station_env.ambient_light_energy = 1.0
+	station_proxy_world.environment = station_env
+
+	dock_interior_viewport.world_3d = station_proxy_world
+
+	# Create visual geometry for station interior in proxy space
+	_create_station_proxy_interior_scene(dock_interior_viewport)
+
+	add_child(dock_interior_viewport)
+
+func _create_proxy_interior_scene(viewport: SubViewport) -> void:
+	# Create visual geometry for ship interior in proxy space
+	# This matches the proxy colliders and is what the PIP camera sees
+
+	var size_scale = 3.0
+
+	# Create container for proxy visuals
+	var proxy_interior_visuals = Node3D.new()
+	proxy_interior_visuals.name = "ShipProxyInteriorVisuals"
+	viewport.add_child(proxy_interior_visuals)
+
+	# Materials
+	var floor_material := StandardMaterial3D.new()
+	floor_material.albedo_color = Color(0.4, 0.4, 0.4)
+	floor_material.metallic = 0.0
+	floor_material.roughness = 0.9
+
+	var wall_material := StandardMaterial3D.new()
+	wall_material.albedo_color = Color(0.6, 0.6, 0.6)
+	wall_material.metallic = 0.0
+	wall_material.roughness = 0.8
+
+	# Floor - MATCHES proxy collider (9.8 * size_scale = 29.4 units)
+	var floor_mesh := MeshInstance3D.new()
+	floor_mesh.mesh = BoxMesh.new()
+	floor_mesh.mesh.size = Vector3(5 * size_scale, 0.1, 9.8 * size_scale)
+	floor_mesh.material_override = floor_material
+	floor_mesh.position = Vector3(0, -1.4 * size_scale, 0)
+	proxy_interior_visuals.add_child(floor_mesh)
+
+	# Left wall - MATCHES proxy collider length
+	var left_wall := MeshInstance3D.new()
+	left_wall.mesh = BoxMesh.new()
+	left_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 9.8 * size_scale)
+	left_wall.material_override = wall_material
+	left_wall.position = Vector3(-2.5 * size_scale, 0, 0)
+	proxy_interior_visuals.add_child(left_wall)
+
+	# Right wall - MATCHES proxy collider length
+	var right_wall := MeshInstance3D.new()
+	right_wall.mesh = BoxMesh.new()
+	right_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 9.8 * size_scale)
+	right_wall.material_override = wall_material
+	right_wall.position = Vector3(2.5 * size_scale, 0, 0)
+	proxy_interior_visuals.add_child(right_wall)
+
+	# Back wall - MATCHES proxy collider position
+	var back_wall := MeshInstance3D.new()
+	back_wall.mesh = BoxMesh.new()
+	back_wall.mesh.size = Vector3(5 * size_scale, 2.5 * size_scale, 0.1)
+	back_wall.material_override = wall_material
+	back_wall.position = Vector3(0, 0, -4.9 * size_scale)
+	proxy_interior_visuals.add_child(back_wall)
+
+	# Ceiling - MATCHES proxy collider
+	var ceiling := MeshInstance3D.new()
+	ceiling.mesh = BoxMesh.new()
+	ceiling.mesh.size = Vector3(5 * size_scale, 0.1, 9.8 * size_scale)
+	ceiling.material_override = wall_material
+	ceiling.position = Vector3(0, 1.4 * size_scale, 0)
+	proxy_interior_visuals.add_child(ceiling)
+
+	# NO LIGHT - wireframe mode doesn't need lighting
+
+	# Create character proxy visual (will be updated to follow proxy body position)
+	var character_proxy_visual = MeshInstance3D.new()
+	character_proxy_visual.name = "CharacterProxyVisual"
+	var capsule = CapsuleMesh.new()
+	capsule.radius = 0.3
+	capsule.height = 1.4
+	character_proxy_visual.mesh = capsule
+
+	var char_material = StandardMaterial3D.new()
+	char_material.albedo_color = Color(0.2, 1.0, 0.2)
+	char_material.emission_enabled = true
+	char_material.emission = Color(0.1, 0.5, 0.1)
+	char_material.emission_energy_multiplier = 1.0
+	character_proxy_visual.material_override = char_material
+
+	proxy_interior_visuals.add_child(character_proxy_visual)
+
+	print("Created ship proxy interior visuals")
+
+func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
+	# Create visual geometry for station interior in proxy space
+
+	# Create container for proxy visuals
+	var proxy_interior_visuals = Node3D.new()
+	proxy_interior_visuals.name = "StationProxyInteriorVisuals"
+	viewport.add_child(proxy_interior_visuals)
+
+	# Materials
+	var floor_material := StandardMaterial3D.new()
+	floor_material.albedo_color = Color(0.5, 0.5, 0.5)
+	floor_material.metallic = 0.1
+	floor_material.roughness = 0.8
+
+	var wall_material := StandardMaterial3D.new()
+	wall_material.albedo_color = Color(0.7, 0.7, 0.7)
+	wall_material.metallic = 0.1
+	wall_material.roughness = 0.7
+
+	# Floor
+	var floor_mesh := MeshInstance3D.new()
+	floor_mesh.mesh = BoxMesh.new()
+	floor_mesh.mesh.size = Vector3(50, 0.2, 70)
+	floor_mesh.material_override = floor_material
+	floor_mesh.position = Vector3(0, -5, 0)
+	proxy_interior_visuals.add_child(floor_mesh)
+
+	# Left wall
+	var left_wall := MeshInstance3D.new()
+	left_wall.mesh = BoxMesh.new()
+	left_wall.mesh.size = Vector3(0.2, 30, 70)
+	left_wall.material_override = wall_material
+	left_wall.position = Vector3(-25, 10, 0)
+	proxy_interior_visuals.add_child(left_wall)
+
+	# Right wall
+	var right_wall := MeshInstance3D.new()
+	right_wall.mesh = BoxMesh.new()
+	right_wall.mesh.size = Vector3(0.2, 30, 70)
+	right_wall.material_override = wall_material
+	right_wall.position = Vector3(25, 10, 0)
+	proxy_interior_visuals.add_child(right_wall)
+
+	# Back wall
+	var back_wall := MeshInstance3D.new()
+	back_wall.mesh = BoxMesh.new()
+	back_wall.mesh.size = Vector3(50, 30, 0.2)
+	back_wall.material_override = wall_material
+	back_wall.position = Vector3(0, 10, -35)
+	proxy_interior_visuals.add_child(back_wall)
+
+	# Ceiling
+	var ceiling := MeshInstance3D.new()
+	ceiling.mesh = BoxMesh.new()
+	ceiling.mesh.size = Vector3(50, 0.2, 70)
+	ceiling.material_override = wall_material
+	ceiling.position = Vector3(0, 25, 0)
+	proxy_interior_visuals.add_child(ceiling)
+
+	# NO LIGHT - wireframe mode doesn't need lighting
+
+	# Create character proxy visual (will be updated to follow proxy body position)
+	var character_proxy_visual = MeshInstance3D.new()
+	character_proxy_visual.name = "CharacterProxyVisual"
+	var capsule = CapsuleMesh.new()
+	capsule.radius = 0.3
+	capsule.height = 1.4
+	character_proxy_visual.mesh = capsule
+
+	var char_material = StandardMaterial3D.new()
+	char_material.albedo_color = Color(0.2, 1.0, 0.2)
+	char_material.emission_enabled = true
+	char_material.emission = Color(0.1, 0.5, 0.1)
+	char_material.emission_energy_multiplier = 1.0
+	character_proxy_visual.material_override = char_material
+
+	proxy_interior_visuals.add_child(character_proxy_visual)
+
+	print("Created station proxy interior visuals")
+
+func _setup_cameras() -> void:
+	# Main FPS camera (interior proxy view) - uses default viewport
+	main_camera = Camera3D.new()
+	main_camera.name = "MainCamera"
+	main_camera.fov = 75
+	main_camera.near = 0.1
+	main_camera.far = 5000
+	main_camera.current = true
+	# Set initial position so we can see something
+	main_camera.position = Vector3(0, 1.5, 0)
+	add_child(main_camera)
+
+	# External world camera (god view) - uses external viewport - WIREFRAME
+	external_camera = Camera3D.new()
+	external_camera.name = "ExternalCamera"
+	external_camera.fov = 60
+	external_camera.near = 0.1
+	external_camera.far = 5000
+	external_camera.cull_mask = 0xFFFFF  # See everything including layer 2 (character)
+	# Set initial position for external view
+	external_camera.position = Vector3(0, 15, 20)
+	external_viewport.add_child(external_camera)
+	# Look at must be called after adding to tree
+	await get_tree().process_frame
+	external_camera.look_at(Vector3.ZERO, Vector3.UP)
+
+	# Dock interior camera (fixed view inside container) - WIREFRAME
+	dock_interior_camera = Camera3D.new()
+	dock_interior_camera.name = "DockInteriorCamera"
+	dock_interior_camera.fov = 60
+	dock_interior_camera.near = 0.1
+	dock_interior_camera.far = 5000
+	dock_interior_camera.cull_mask = 0xFFFFF  # See everything including layer 2 (character)
+	# Position inside the container looking at the dock area
+	dock_interior_camera.position = Vector3(0, 10, 20)
+	dock_interior_viewport.add_child(dock_interior_camera)
+	await get_tree().process_frame
+	dock_interior_camera.look_at(Vector3(0, 0, 0), Vector3.UP)
+
+	print("Cameras created - Main, External, and Dock Interior")
+
+func _setup_display() -> void:
+	# Create a CanvasLayer to display all viewports
+	var canvas_layer := CanvasLayer.new()
+	canvas_layer.layer = 100
+	add_child(canvas_layer)
+
+	# External view (picture-in-picture bottom right - wireframe)
+	external_rect = TextureRect.new()
+	external_rect.name = "ExternalView"
+	external_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	external_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+
+	var external_style = StyleBoxFlat.new()
+	external_style.bg_color = Color(0, 0, 0, 0.5)
+	external_style.border_color = Color(0, 1, 1, 1)  # Cyan border
+	external_style.border_width_left = 3
+	external_style.border_width_right = 3
+	external_style.border_width_top = 3
+	external_style.border_width_bottom = 3
+
+	var external_panel = Panel.new()
+	external_panel.name = "ExternalPIPPanel"
+	external_panel.add_theme_stylebox_override("panel", external_style)
+	canvas_layer.add_child(external_panel)
+	external_panel.add_child(external_rect)
+
+	# Dock interior view (picture-in-picture top right - wireframe)
+	dock_interior_rect = TextureRect.new()
+	dock_interior_rect.name = "DockInteriorView"
+	dock_interior_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	dock_interior_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+
+	var dock_style = StyleBoxFlat.new()
+	dock_style.bg_color = Color(0, 0, 0, 0.5)
+	dock_style.border_color = Color(1, 0.5, 0, 1)  # Orange border
+	dock_style.border_width_left = 3
+	dock_style.border_width_right = 3
+	dock_style.border_width_top = 3
+	dock_style.border_width_bottom = 3
+
+	var dock_panel = Panel.new()
+	dock_panel.name = "DockInteriorPIPPanel"
+	dock_panel.add_theme_stylebox_override("panel", dock_style)
+	canvas_layer.add_child(dock_panel)
+	dock_panel.add_child(dock_interior_rect)
+
+	print("PIP TextureRects created - External (cyan) and Dock Interior (orange)")
+
+	# Update sizes on ready
+	_update_viewport_sizes()
+
+	# Connect to viewport size changes
+	get_viewport().size_changed.connect(_update_viewport_sizes)
+
+func _update_viewport_sizes() -> void:
+	if not external_rect or not external_viewport or not dock_interior_rect or not dock_interior_viewport:
+		return
+
+	var window_size = get_viewport().get_visible_rect().size
+
+	# PIP dimensions
+	var pip_width = window_size.x / 4.0
+	var pip_height = window_size.y / 4.0
+
+	# External view (bottom right corner) - Ship interior wireframe
+	var external_pos = Vector2(window_size.x - pip_width - 10, window_size.y - pip_height - 10)
+	external_viewport.size = Vector2i(pip_width, pip_height)
+	external_rect.texture = external_viewport.get_texture()
+	external_rect.size = Vector2(pip_width, pip_height)
+	external_rect.position = Vector2.ZERO
+
+	var external_panel = external_rect.get_parent()
+	if external_panel:
+		external_panel.position = external_pos
+		external_panel.size = Vector2(pip_width, pip_height)
+
+	# Dock interior view (top right corner) - Docking station interior wireframe
+	var dock_pos = Vector2(window_size.x - pip_width - 10, 10)
+	dock_interior_viewport.size = Vector2i(pip_width, pip_height)
+	dock_interior_rect.texture = dock_interior_viewport.get_texture()
+	dock_interior_rect.size = Vector2(pip_width, pip_height)
+	dock_interior_rect.position = Vector2.ZERO
+
+	var dock_panel = dock_interior_rect.get_parent()
+	if dock_panel:
+		dock_panel.position = dock_pos
+		dock_panel.size = Vector2(pip_width, pip_height)
+
+	print("PIPs setup - External (bottom right), Dock Interior (top right)")
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+		base_rotation.y -= event.relative.x * mouse_sensitivity
+		base_rotation.x -= event.relative.y * mouse_sensitivity
+		base_rotation.x = clamp(base_rotation.x, -PI/2, PI/2)
+
+	# Toggle mouse capture
+	if event.is_action_pressed("ui_cancel"):
+		if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		else:
+			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+	# Toggle third person mode with 'O' key
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_O:
+			third_person_mode = !third_person_mode
+			print("=== THIRD PERSON MODE TOGGLED: ", "ON" if third_person_mode else "OFF", " ===")
+
+func _process(_delta: float) -> void:
+	_update_main_camera()
+	_update_external_camera()
+	_update_dock_interior_camera()
+	_update_proxy_character_visuals()
+
+func _update_main_camera() -> void:
+	if not is_instance_valid(character):
+		print("WARNING: Character not valid in camera update")
+		return
+
+	if character.is_in_container and is_instance_valid(vehicle_container) and vehicle_container.exterior_body:
+		_update_container_camera()
+	elif character.is_in_vehicle and is_instance_valid(vehicle) and vehicle.exterior_body:
+		_update_vehicle_camera()
+	else:
+		_update_world_camera()
+
+	# Update character visibility
+	# In first person: hide from main camera but show in PIP
+	# In third person: show everywhere
+	if character and character.character_visual:
+		character.character_visual.visible = true  # Always visible in world
+		if third_person_mode:
+			# Show to all cameras
+			main_camera.cull_mask = 0xFFFFF  # See everything
+			character.character_visual.layers = 1  # Layer 1 (default)
+		else:
+			# Hide character from main camera, but show in PIP cameras
+			# Main camera doesn't see layer 2, but PIP cameras see all layers
+			main_camera.cull_mask = 0xFFFFFFFD  # All layers except layer 2 (binary: ...11111101)
+			character.character_visual.layers = 2  # Put character on layer 2 (binary: 00000010)
+
+func _update_container_camera() -> void:
+	var proxy_pos = character.get_proxy_position()
+	var container_pos = vehicle_container.exterior_body.global_position
+	var container_basis = vehicle_container.exterior_body.global_transform.basis
+
+	if third_person_mode:
+		# Third person: camera behind and above character in container space
+		var proxy_camera_pos = Vector3(proxy_pos.x, proxy_pos.y + 3, proxy_pos.z)
+
+		# Apply rotation to offset in proxy space
+		var rotation_basis = Basis.from_euler(base_rotation)
+		var forward = -rotation_basis.z
+		var offset = -forward * third_person_distance
+		proxy_camera_pos += offset
+
+		var world_camera_pos = container_pos + container_basis * proxy_camera_pos
+		main_camera.global_position = world_camera_pos
+
+		var local_mouse_rotation = Basis.from_euler(Vector3(base_rotation.x, base_rotation.y, 0))
+		main_camera.global_transform.basis = container_basis * local_mouse_rotation
+	else:
+		# First person: camera at head height
+		var proxy_camera_pos = Vector3(proxy_pos.x, proxy_pos.y + 1.5, proxy_pos.z)
+		var world_camera_pos = container_pos + container_basis * proxy_camera_pos
+
+		main_camera.global_position = world_camera_pos
+
+		var local_mouse_rotation = Basis.from_euler(Vector3(base_rotation.x, base_rotation.y, 0))
+		main_camera.global_transform.basis = container_basis * local_mouse_rotation
+
+func _update_vehicle_camera() -> void:
+	if not is_instance_valid(vehicle) or not vehicle.exterior_body:
+		print("WARNING: Vehicle or exterior_body not valid")
+		return
+
+	var proxy_pos = character.get_proxy_position()
+	var vehicle_pos = vehicle.exterior_body.global_position
+	var vehicle_basis = vehicle.exterior_body.global_transform.basis
+
+	if third_person_mode:
+		# Third person: camera behind and above character in vehicle space
+		var proxy_camera_pos = Vector3(proxy_pos.x, proxy_pos.y + 3, proxy_pos.z)
+
+		# Apply rotation to offset in proxy space
+		var rotation_basis = Basis.from_euler(base_rotation)
+		var forward = -rotation_basis.z
+		var offset = -forward * third_person_distance
+		proxy_camera_pos += offset
+
+		var world_camera_pos = vehicle_pos + vehicle_basis * proxy_camera_pos
+		main_camera.global_position = world_camera_pos
+
+		var local_mouse_rotation = Basis.from_euler(Vector3(base_rotation.x, base_rotation.y, 0))
+		main_camera.global_transform.basis = vehicle_basis * local_mouse_rotation
+	else:
+		# First person: camera at head height
+		var proxy_camera_pos = Vector3(proxy_pos.x, proxy_pos.y + 1.5, proxy_pos.z)
+		var world_camera_pos = vehicle_pos + vehicle_basis * proxy_camera_pos
+
+		main_camera.global_position = world_camera_pos
+
+		var local_mouse_rotation = Basis.from_euler(Vector3(base_rotation.x, base_rotation.y, 0))
+		main_camera.global_transform.basis = vehicle_basis * local_mouse_rotation
+
+func _update_world_camera() -> void:
+	var world_pos = character.get_world_position()
+
+	if third_person_mode:
+		# Third person camera - position behind and above character
+		var rotation_basis = Basis.from_euler(base_rotation)
+		var forward = -rotation_basis.z
+		var offset = -forward * third_person_distance + Vector3(0, 3, 0)
+		main_camera.global_position = world_pos + offset
+		main_camera.global_transform.basis = rotation_basis
+	else:
+		# First person camera - at head height
+		var cam_pos = world_pos + Vector3(0, 1.5, 0)
+		main_camera.global_position = cam_pos
+		var rotation_basis = Basis.from_euler(base_rotation)
+		main_camera.global_transform.basis = rotation_basis
+
+func _update_external_camera() -> void:
+	# External camera shows ship PROXY interior (stable, non-moving space)
+	if not is_instance_valid(external_camera):
+		return
+
+	# Camera is in the proxy interior space (stable coordinates)
+	# Position camera at back of ship interior, elevated
+	var size_scale = 3.0
+	var cam_pos = Vector3(0, 3, -12 * size_scale / 3.0)  # Back of interior, elevated
+
+	external_camera.position = cam_pos
+
+	# Look toward the front opening
+	var look_target = Vector3(0, 0, 12 * size_scale / 3.0)  # Front entrance
+	external_camera.look_at(look_target, Vector3.UP)
+
+func _update_dock_interior_camera() -> void:
+	# Dock interior camera shows station PROXY interior (stable, non-moving space)
+	if not is_instance_valid(dock_interior_camera):
+		return
+
+	# Camera is in the proxy interior space (stable coordinates)
+	# Position camera at back of station interior, elevated
+	var cam_pos = Vector3(0, 15, -30)  # Back of station, elevated view
+
+	dock_interior_camera.position = cam_pos
+
+	# Look toward the entrance/dock bay opening
+	var look_target = Vector3(0, 5, 30)  # Front opening
+	dock_interior_camera.look_at(look_target, Vector3.UP)
+
+func get_forward_direction() -> Vector3:
+	if not is_instance_valid(character):
+		return -main_camera.global_transform.basis.z.normalized()
+
+	if character.is_in_vehicle or character.is_in_container:
+		var forward = Vector3(0, 0, -1)
+		var rotation_basis = Basis.from_euler(base_rotation)
+		forward = rotation_basis * forward
+		forward.y = 0
+		return forward.normalized()
+	else:
+		var forward = -main_camera.global_transform.basis.z
+		forward.y = 0
+		return forward.normalized()
+
+func get_right_direction() -> Vector3:
+	if not is_instance_valid(character):
+		return main_camera.global_transform.basis.x.normalized()
+
+	if character.is_in_vehicle or character.is_in_container:
+		var right = Vector3(1, 0, 0)
+		var rotation_basis = Basis.from_euler(base_rotation)
+		right = rotation_basis * right
+		right.y = 0
+		return right.normalized()
+	else:
+		var right = main_camera.global_transform.basis.x
+		right.y = 0
+		return right.normalized()
+
+func _update_proxy_character_visuals() -> void:
+	# Update character visual in proxy interior viewports
+	if not is_instance_valid(character):
+		return
+
+	# Get proxy position from character controller
+	var proxy_pos = character.get_proxy_position()
+
+	# Update character visual in ship interior viewport
+	if is_instance_valid(external_viewport):
+		var ship_char_visual = external_viewport.get_node_or_null("ShipProxyInteriorVisuals/CharacterProxyVisual")
+		if ship_char_visual:
+			# Only show if character is in vehicle
+			ship_char_visual.visible = character.is_in_vehicle
+			if character.is_in_vehicle:
+				ship_char_visual.position = proxy_pos
+
+	# Update character visual in station interior viewport (shares same viewport world)
+	if is_instance_valid(dock_interior_viewport):
+		var station_char_visual = dock_interior_viewport.get_node_or_null("StationProxyInteriorVisuals/CharacterProxyVisual")
+		if station_char_visual:
+			# Only show if character is in container
+			station_char_visual.visible = character.is_in_container
+			if character.is_in_container:
+				station_char_visual.position = proxy_pos
+
+func adjust_camera_for_vehicle_entry() -> void:
+	# When entering vehicle, convert camera from world-space to vehicle-local space
+	# Current world direction needs to be preserved in vehicle-local coordinates
+	if not is_instance_valid(vehicle) or not vehicle.exterior_body or not is_instance_valid(main_camera):
+		return
+
+	var vehicle_basis = vehicle.exterior_body.global_transform.basis
+	var current_world_basis = main_camera.global_transform.basis
+
+	# Convert world-space camera direction to vehicle-local space
+	# vehicle_basis * local_basis = current_world_basis
+	# local_basis = vehicle_basis.inverse() * current_world_basis
+	var local_basis = vehicle_basis.inverse() * current_world_basis
+	var local_euler = local_basis.get_euler()
+
+	# Set base_rotation to vehicle-local orientation
+	base_rotation.x = local_euler.x  # Pitch
+	base_rotation.y = local_euler.y  # Yaw
+	# Don't change roll (base_rotation.z stays 0)
+
+func adjust_camera_for_vehicle_exit() -> void:
+	# When exiting vehicle, preserve the current world-space camera direction
+	# Simply extract euler angles from the camera's current world basis
+	if not is_instance_valid(main_camera):
+		return
+
+	var current_world_basis = main_camera.global_transform.basis
+	var world_euler = current_world_basis.get_euler()
+
+	# Set base_rotation to match current world orientation
+	base_rotation.x = world_euler.x  # Pitch
+	base_rotation.y = world_euler.y  # Yaw
+	# Don't change roll (base_rotation.z stays 0)
+
+func adjust_camera_for_container_exit() -> void:
+	# When exiting container, preserve the current world-space camera direction
+	# Simply extract euler angles from the camera's current world basis
+	if not is_instance_valid(main_camera):
+		return
+
+	var current_world_basis = main_camera.global_transform.basis
+	var world_euler = current_world_basis.get_euler()
+
+	# Set base_rotation to match current world orientation
+	base_rotation.x = world_euler.x  # Pitch
+	base_rotation.y = world_euler.y  # Yaw
+	# Don't change roll (base_rotation.z stays 0)

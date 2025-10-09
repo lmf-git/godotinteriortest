@@ -1,0 +1,4 @@
+res://game_manager.gd
+res://vehicle.gd
+res://character_controller.gd
+res://dual_camera_view.gd

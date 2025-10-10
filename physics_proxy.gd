@@ -24,9 +24,9 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	# Clean up created physics spaces
-	if proxy_interior_space and proxy_interior_space != RID():
+	if proxy_interior_space.is_valid():
 		PhysicsServer3D.free_rid(proxy_interior_space)
-	if dock_proxy_space and dock_proxy_space != RID():
+	if dock_proxy_space.is_valid():
 		PhysicsServer3D.free_rid(dock_proxy_space)
 
 func get_world_space() -> RID:

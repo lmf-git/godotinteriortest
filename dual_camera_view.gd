@@ -46,10 +46,6 @@ func _ready() -> void:
 
 	_update_viewport_sizes()
 
-	print("DualCameraView ready - PIP should be visible now")
-	print("External viewport wireframe: ", external_viewport.debug_draw == Viewport.DEBUG_DRAW_WIREFRAME)
-	print("Dock viewport wireframe: ", dock_interior_viewport.debug_draw == Viewport.DEBUG_DRAW_WIREFRAME)
-
 func _setup_viewports() -> void:
 	# External viewport (ship interior proxy space) - picture-in-picture bottom right
 	external_viewport = SubViewport.new()
@@ -182,8 +178,6 @@ func _create_proxy_interior_scene(viewport: SubViewport) -> void:
 
 	proxy_interior_visuals.add_child(character_proxy_visual)
 
-	print("Created ship proxy interior visuals")
-
 func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 	# Create visual geometry for station interior in proxy space
 
@@ -262,8 +256,6 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 
 	proxy_interior_visuals.add_child(character_proxy_visual)
 
-	print("Created station proxy interior visuals")
-
 func _setup_cameras() -> void:
 	# Main FPS camera (interior proxy view) - uses default viewport
 	main_camera = Camera3D.new()
@@ -302,8 +294,6 @@ func _setup_cameras() -> void:
 	dock_interior_viewport.add_child(dock_interior_camera)
 	await get_tree().process_frame
 	dock_interior_camera.look_at(Vector3(0, 0, 0), Vector3.UP)
-
-	print("Cameras created - Main, External, and Dock Interior")
 
 func _setup_display() -> void:
 	# Create a CanvasLayer to display all viewports
@@ -351,8 +341,6 @@ func _setup_display() -> void:
 	canvas_layer.add_child(dock_panel)
 	dock_panel.add_child(dock_interior_rect)
 
-	print("PIP TextureRects created - External (cyan) and Dock Interior (orange)")
-
 	# Update sizes on ready
 	_update_viewport_sizes()
 
@@ -393,8 +381,6 @@ func _update_viewport_sizes() -> void:
 		dock_panel.position = dock_pos
 		dock_panel.size = Vector2(pip_width, pip_height)
 
-	print("PIPs setup - External (bottom right), Dock Interior (top right)")
-
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
 		base_rotation.y -= event.relative.x * mouse_sensitivity
@@ -412,7 +398,6 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_O:
 			third_person_mode = !third_person_mode
-			print("=== THIRD PERSON MODE TOGGLED: ", "ON" if third_person_mode else "OFF", " ===")
 
 func _process(_delta: float) -> void:
 	_update_main_camera()
@@ -422,7 +407,6 @@ func _process(_delta: float) -> void:
 
 func _update_main_camera() -> void:
 	if not is_instance_valid(character):
-		print("WARNING: Character not valid in camera update")
 		return
 
 	if character.is_in_container and is_instance_valid(vehicle_container) and vehicle_container.exterior_body:
@@ -479,7 +463,6 @@ func _update_container_camera() -> void:
 
 func _update_vehicle_camera() -> void:
 	if not is_instance_valid(vehicle) or not vehicle.exterior_body:
-		print("WARNING: Vehicle or exterior_body not valid")
 		return
 
 	var proxy_pos = character.get_proxy_position()
@@ -614,51 +597,3 @@ func _update_proxy_character_visuals() -> void:
 			station_char_visual.visible = character.is_in_container
 			if character.is_in_container:
 				station_char_visual.position = proxy_pos
-
-func adjust_camera_for_vehicle_entry() -> void:
-	# When entering vehicle, convert camera from world-space to vehicle-local space
-	# Current world direction needs to be preserved in vehicle-local coordinates
-	if not is_instance_valid(vehicle) or not vehicle.exterior_body or not is_instance_valid(main_camera):
-		return
-
-	var vehicle_basis = vehicle.exterior_body.global_transform.basis
-	var current_world_basis = main_camera.global_transform.basis
-
-	# Convert world-space camera direction to vehicle-local space
-	# vehicle_basis * local_basis = current_world_basis
-	# local_basis = vehicle_basis.inverse() * current_world_basis
-	var local_basis = vehicle_basis.inverse() * current_world_basis
-	var local_euler = local_basis.get_euler()
-
-	# Set base_rotation to vehicle-local orientation
-	base_rotation.x = local_euler.x  # Pitch
-	base_rotation.y = local_euler.y  # Yaw
-	# Don't change roll (base_rotation.z stays 0)
-
-func adjust_camera_for_vehicle_exit() -> void:
-	# When exiting vehicle, preserve the current world-space camera direction
-	# Simply extract euler angles from the camera's current world basis
-	if not is_instance_valid(main_camera):
-		return
-
-	var current_world_basis = main_camera.global_transform.basis
-	var world_euler = current_world_basis.get_euler()
-
-	# Set base_rotation to match current world orientation
-	base_rotation.x = world_euler.x  # Pitch
-	base_rotation.y = world_euler.y  # Yaw
-	# Don't change roll (base_rotation.z stays 0)
-
-func adjust_camera_for_container_exit() -> void:
-	# When exiting container, preserve the current world-space camera direction
-	# Simply extract euler angles from the camera's current world basis
-	if not is_instance_valid(main_camera):
-		return
-
-	var current_world_basis = main_camera.global_transform.basis
-	var world_euler = current_world_basis.get_euler()
-
-	# Set base_rotation to match current world orientation
-	base_rotation.x = world_euler.x  # Pitch
-	base_rotation.y = world_euler.y  # Yaw
-	# Don't change roll (base_rotation.z stays 0)

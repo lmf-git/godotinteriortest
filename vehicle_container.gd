@@ -283,9 +283,9 @@ func apply_thrust(direction: Vector3, force: float) -> void:
 func _exit_tree() -> void:
 	# Clean up proxy colliders
 	for collider in interior_proxy_colliders:
-		if collider and collider != RID():
+		if collider.is_valid():
 			PhysicsServer3D.free_rid(collider)
 
 	for collider in dock_proxy_colliders:
-		if collider and collider != RID():
+		if collider.is_valid():
 			PhysicsServer3D.free_rid(collider)

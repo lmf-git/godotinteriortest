@@ -106,12 +106,15 @@ func _physics_process(delta: float) -> void:
 		transition_lock = false
 
 	_handle_movement(delta)
+
+func _process(_delta: float) -> void:
+	# Update visual every frame for smooth rendering (not just physics frames)
 	_update_character_visual_position()
 
 func _handle_movement(delta: float) -> void:
 	# Use appropriate physics body based on current space
 	var current_body = proxy_body if is_in_vehicle or is_in_container else world_body
-	if current_body == RID():
+	if not current_body.is_valid():
 		return
 
 	# Block movement during transition frame
@@ -151,7 +154,7 @@ func _handle_movement(delta: float) -> void:
 
 func _update_character_visual_position() -> void:
 	# Update character visual based on current physics space
-	if is_in_container and proxy_body != RID():
+	if is_in_container and proxy_body.is_valid():
 		# Character in container interior - position relative to container
 		var proxy_transform: Transform3D = PhysicsServer3D.body_get_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		var proxy_pos = proxy_transform.origin
@@ -170,12 +173,8 @@ func _update_character_visual_position() -> void:
 						var world_pos = container_transform.origin + container_basis * proxy_pos
 						character_visual.global_position = world_pos
 						character_visual.global_transform.basis = container_basis
-
-						# Debug
-						if Engine.get_frames_drawn() % 30 == 0:
-							print("Container - Proxy pos: ", proxy_pos, " World pos: ", world_pos)
 					break
-	elif is_in_vehicle and proxy_body != RID():
+	elif is_in_vehicle and proxy_body.is_valid():
 		# Character in vehicle interior - position relative to vehicle
 		var proxy_transform: Transform3D = PhysicsServer3D.body_get_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		var proxy_pos = proxy_transform.origin
@@ -194,18 +193,8 @@ func _update_character_visual_position() -> void:
 						var world_pos = vehicle_transform.origin + vehicle_basis * proxy_pos
 						character_visual.global_position = world_pos
 						character_visual.global_transform.basis = vehicle_basis
-
-						# Debug
-						if Engine.get_frames_drawn() % 30 == 0:
-							print("Vehicle - Proxy pos: ", proxy_pos, " World pos: ", world_pos)
-					else:
-						if Engine.get_frames_drawn() % 30 == 0:
-							print("ERROR: Vehicle has no exterior_body!")
 					break
-		else:
-			if Engine.get_frames_drawn() % 30 == 0:
-				print("ERROR: No game_manager parent found!")
-	elif not is_in_vehicle and not is_in_container and world_body != RID():
+	elif not is_in_vehicle and not is_in_container and world_body.is_valid():
 		# Character in world space
 		var world_transform: Transform3D = PhysicsServer3D.body_get_state(world_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		character_visual.global_transform = world_transform
@@ -236,42 +225,52 @@ func exit_container() -> void:
 	is_in_container = false
 
 func get_proxy_position() -> Vector3:
-	if proxy_body != RID():
+	if proxy_body.is_valid():
 		var body_transform: Transform3D = PhysicsServer3D.body_get_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		return body_transform.origin
 	return Vector3.ZERO
 
 func get_world_position() -> Vector3:
-	if world_body != RID():
+	if world_body.is_valid():
 		var body_transform: Transform3D = PhysicsServer3D.body_get_state(world_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		return body_transform.origin
 	return Vector3.ZERO
 
-func set_proxy_position(pos: Vector3) -> void:
-	if proxy_body != RID():
+func get_proxy_velocity() -> Vector3:
+	if proxy_body.is_valid():
+		return PhysicsServer3D.body_get_state(proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
+	return Vector3.ZERO
+
+func get_world_velocity() -> Vector3:
+	if world_body.is_valid():
+		return PhysicsServer3D.body_get_state(world_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
+	return Vector3.ZERO
+
+func set_proxy_position(pos: Vector3, velocity: Vector3 = Vector3.ZERO) -> void:
+	if proxy_body.is_valid():
 		var body_transform: Transform3D = PhysicsServer3D.body_get_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		body_transform.origin = pos
 		PhysicsServer3D.body_set_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, body_transform)
-		# Reset velocity when setting position to avoid carrying momentum
-		PhysicsServer3D.body_set_state(proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, Vector3.ZERO)
+		# Preserve velocity for seamless transition (or reset if Vector3.ZERO passed)
+		PhysicsServer3D.body_set_state(proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, velocity)
 		PhysicsServer3D.body_set_state(proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, Vector3.ZERO)
 		# Lock movement for one frame to prevent input from pushing player
 		transition_lock = true
 
-func set_world_position(pos: Vector3) -> void:
-	if world_body != RID():
+func set_world_position(pos: Vector3, velocity: Vector3 = Vector3.ZERO) -> void:
+	if world_body.is_valid():
 		var body_transform: Transform3D = PhysicsServer3D.body_get_state(world_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		body_transform.origin = pos
 		PhysicsServer3D.body_set_state(world_body, PhysicsServer3D.BODY_STATE_TRANSFORM, body_transform)
-		# Reset velocity to avoid carrying momentum from previous space
-		PhysicsServer3D.body_set_state(world_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, Vector3.ZERO)
+		# Preserve velocity for seamless transition (or reset if Vector3.ZERO passed)
+		PhysicsServer3D.body_set_state(world_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, velocity)
 		PhysicsServer3D.body_set_state(world_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, Vector3.ZERO)
 		# Lock movement for one frame to prevent input from pushing player
 		transition_lock = true
 
 func _exit_tree() -> void:
 	# Clean up physics bodies
-	if world_body and world_body != RID():
+	if world_body.is_valid():
 		PhysicsServer3D.free_rid(world_body)
-	if proxy_body and proxy_body != RID():
+	if proxy_body.is_valid():
 		PhysicsServer3D.free_rid(proxy_body)

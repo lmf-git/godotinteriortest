@@ -312,7 +312,7 @@ func _create_transition_zone() -> void:
 
 func _process(_delta: float) -> void:
 	# Update exterior body visual based on docked state
-	if is_docked and dock_proxy_body != RID() and exterior_body:
+	if is_docked and dock_proxy_body.is_valid() and exterior_body:
 		# Ship is docked: transform dock proxy position to world space
 		var dock_transform: Transform3D = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
@@ -331,7 +331,7 @@ func _process(_delta: float) -> void:
 	# Interior visuals automatically rotate with exterior_body (they're parented to it)
 
 func apply_thrust(direction: Vector3, force: float) -> void:
-	if is_docked and dock_proxy_body != RID():
+	if is_docked and dock_proxy_body.is_valid():
 		# Apply thrust in dock proxy
 		var current_vel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
 		var new_vel = current_vel + direction * force
@@ -341,7 +341,7 @@ func apply_thrust(direction: Vector3, force: float) -> void:
 		exterior_body.apply_central_force(direction * force)
 
 func apply_rotation(axis: Vector3, torque: float) -> void:
-	if is_docked and dock_proxy_body != RID():
+	if is_docked and dock_proxy_body.is_valid():
 		# Apply rotation in dock proxy
 		var current_angvel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
 		var new_angvel = current_angvel + axis * torque
@@ -354,7 +354,6 @@ func toggle_magnetism() -> void:
 	if is_docked and physics_proxy:
 		magnetism_enabled = !magnetism_enabled
 		physics_proxy.set_proxy_interior_gravity(magnetism_enabled)
-		print("Vehicle magnetism ", "ON" if magnetism_enabled else "OFF")
 
 func set_docked(docked: bool) -> void:
 	is_docked = docked
@@ -362,8 +361,8 @@ func set_docked(docked: bool) -> void:
 func _exit_tree() -> void:
 	# Clean up proxy colliders
 	for collider in interior_proxy_colliders:
-		if collider and collider != RID():
+		if collider.is_valid():
 			PhysicsServer3D.free_rid(collider)
 
-	if dock_proxy_body and dock_proxy_body != RID():
+	if dock_proxy_body.is_valid():
 		PhysicsServer3D.free_rid(dock_proxy_body)

@@ -23,19 +23,13 @@ func _ready() -> void:
 	# Create UI instructions
 	_create_instructions_ui()
 
-	# Debug markers removed - no longer needed
-
 	# Create physics proxy
-	print("Creating physics proxy...")
 	physics_proxy = PhysicsProxy.new()
 	add_child(physics_proxy)
-	print("Physics proxy added to tree")
 
 	# Wait for physics proxy to initialize (it needs 2 frames)
-	print("Waiting for physics proxy to initialize...")
 	await get_tree().process_frame
 	await get_tree().process_frame
-	print("Physics proxy ready!")
 
 	# Create vehicle (spawn on ground, rotated to face player)
 	# Vehicle is now 9 units tall (3*3), so y=4.5 puts bottom at ground level
@@ -67,19 +61,8 @@ func _ready() -> void:
 	dual_camera.vehicle_container = vehicle_container
 	add_child(dual_camera)
 
-	print("FPS camera active")
-
 	# Create stars
 	_create_stars()
-
-	# Debug print positions
-	print("=== Scene Setup ===")
-	print("Character position: ", character.global_position)
-	print("Vehicle position: ", vehicle.global_position)
-	print("Container position: ", vehicle_container.global_position)
-	print("Ground plane created at y=0")
-	print("Character is_in_vehicle: ", character.is_in_vehicle)
-	print("===================")
 
 func _create_ground_plane() -> void:
 	# Create a HUGE ground plane for testing
@@ -107,8 +90,6 @@ func _create_ground_plane() -> void:
 	box_shape.size = Vector3(10000, 0.1, 10000)
 	ground_collision.shape = box_shape
 	ground.add_child(ground_collision)
-
-	print("Ground plane created: 10000x10000")
 
 func _create_lighting() -> void:
 	# 3-Point Lighting Setup - BRIGHT for visibility
@@ -156,34 +137,6 @@ func _create_lighting() -> void:
 	var world_env := WorldEnvironment.new()
 	world_env.environment = ambient_env
 	add_child(world_env)
-
-func _create_debug_markers() -> void:
-	# Create bright markers at key positions for debugging visibility
-	var markers = [
-		{"pos": Vector3(0, 1, 0), "color": Color(1, 0, 0), "name": "Origin"},
-		{"pos": Vector3(0, 1, -10), "color": Color(0, 1, 0), "name": "CharSpawn"},
-		{"pos": Vector3(10, 1, 0), "color": Color(0, 0, 1), "name": "Side"},
-		{"pos": Vector3(0, 1, 10), "color": Color(1, 1, 0), "name": "Behind"},
-	]
-
-	for marker in markers:
-		var mesh_instance := MeshInstance3D.new()
-		mesh_instance.name = marker["name"] + "Marker"
-		var sphere := SphereMesh.new()
-		sphere.radius = 1.0
-		sphere.height = 2.0
-		mesh_instance.mesh = sphere
-
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = marker["color"]
-		mat.emission_enabled = true
-		mat.emission = marker["color"]
-		mat.emission_energy_multiplier = 2.0
-		mesh_instance.material_override = mat
-
-		mesh_instance.position = marker["pos"]
-		add_child(mesh_instance)
-		print("Created marker: ", marker["name"], " at ", marker["pos"])
 
 func _create_stars() -> void:
 	# Create starfield
@@ -444,22 +397,24 @@ func _check_transitions() -> void:
 			var proxy_pos = character.get_proxy_position()
 
 			# Proxy floor extends from z=-14.7 to z=+14.7 (4.9 * 3 = 14.7)
-			# Exit trigger with margin before the edge for safe exit
-			# Exit when approaching the front (z > 14.5)
-			var exited_front = proxy_pos.z > 14.5  # 0.2 unit margin before entrance zone at 14.7
+			# Exit when past the floor edge
+			var exited_front = proxy_pos.z > 14.7
 
 			if exited_front:
-				print("Exiting vehicle seamlessly - proxy pos: ", proxy_pos)
 				# Adjust camera for 180° ship rotation - subtract PI from yaw
 				if is_instance_valid(dual_camera):
 					dual_camera.base_rotation.y -= PI
 
-				# Transform current proxy position to world position for seamless exit
+				# Get current proxy velocity and transform to world space
+				var proxy_velocity = character.get_proxy_velocity()
 				var vehicle_transform = vehicle.exterior_body.global_transform
+				var world_velocity = vehicle_transform.basis * proxy_velocity
+
+				# Transform current proxy position to world position for seamless exit
 				var world_pos = vehicle_transform.origin + vehicle_transform.basis * proxy_pos
 
 				character.exit_vehicle()
-				character.set_world_position(world_pos)
+				character.set_world_position(world_pos, world_velocity)
 				vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
 		else:
 			# Check if character walked into the vehicle entrance
@@ -475,24 +430,26 @@ func _check_transitions() -> void:
 			# Check if character is at the entrance (front opening)
 			# Ship is rotated 180°, so when approaching from behind (world -Z),
 			# the local Z is POSITIVE (ship's local -Z points backward in world +Z)
-			# Entrance zone is the narrow gap between proxy floor and exterior
+			# Detect entrance while approaching floor edge (still within floor bounds)
 			var at_entrance = (
 				abs(local_pos.x) < 9.0 and
 				abs(local_pos.y) < 4.5 and
-				local_pos.z > 14.7 and local_pos.z < 15.0  # Narrow 0.3 unit gap
+				local_pos.z > 14.0 and local_pos.z < 14.7  # Approaching floor edge from outside
 			)
 
 			if at_entrance and not character.is_in_container:
-				print("Entering vehicle seamlessly - world: ", char_world_pos, " local: ", local_pos)
 				# Adjust camera for 180° ship rotation - add PI to yaw
 				if is_instance_valid(dual_camera):
 					dual_camera.base_rotation.y += PI
 
-				# Seamlessly enter - spawn safely inside, away from exit trigger
-				# Exit trigger is at z > 14.5, so clamp to 14.4 maximum (0.1 unit margin)
-				var safe_local_pos = Vector3(local_pos.x, local_pos.y, min(local_pos.z, 14.4))
+				# Get current world velocity and transform to vehicle local space
+				var world_velocity = character.get_world_velocity()
+				var local_velocity = vehicle_transform.basis.inverse() * world_velocity
+
+				# Seamlessly enter - use exact transformed position (no clamping)
+				# This matches the exit behavior which is perfectly seamless
 				character.enter_vehicle()
-				character.set_proxy_position(safe_local_pos)
+				character.set_proxy_position(local_pos, local_velocity)
 				vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
 
 	if not is_instance_valid(vehicle_container):
@@ -505,15 +462,18 @@ func _check_transitions() -> void:
 			var proxy_pos = character.get_proxy_position()
 
 			# Container proxy floor extends from z=-35 to z=+35
-			# Exit when walked PAST the front edge of proxy floor
-			var exited_container = proxy_pos.z > 35.0  # Beyond the front edge of proxy floor
+			# Exit when past the floor edge
+			var exited_container = proxy_pos.z > 35.0
 
 			if exited_container:
-				print("Exiting container (station) seamlessly - proxy pos: ", proxy_pos)
 				# Don't adjust camera - let it naturally transition
 
-				# Transform proxy position to world position
+				# Get current proxy velocity and transform to world space
+				var proxy_velocity = character.get_proxy_velocity()
 				var container_transform = vehicle_container.exterior_body.global_transform
+				var world_velocity = container_transform.basis * proxy_velocity
+
+				# Transform proxy position to world position
 				var world_pos = container_transform.origin + container_transform.basis * proxy_pos
 
 				character.exit_container()
@@ -524,26 +484,24 @@ func _check_transitions() -> void:
 					var vehicle_world_pos = vehicle.exterior_body.global_position
 					var dist_to_ship = world_pos.distance_to(vehicle_world_pos)
 
-					print("Distance to docked ship: ", dist_to_ship)
-
 					# If close to ship (within ~30 units), enter ship interior
 					if dist_to_ship < 30.0:
-						print("Entering ship interior from station")
 						# Transform world pos to vehicle local space
 						var vehicle_transform = vehicle.exterior_body.global_transform
 						var relative_pos = world_pos - vehicle_transform.origin
 						var vehicle_local_pos = vehicle_transform.basis.inverse() * relative_pos
 
+						# Transform world velocity to vehicle local space
+						var vehicle_local_velocity = vehicle_transform.basis.inverse() * world_velocity
+
 						character.enter_vehicle()
-						character.set_proxy_position(vehicle_local_pos)
+						character.set_proxy_position(vehicle_local_pos, vehicle_local_velocity)
 					else:
 						# Too far from ship - go to world space
-						print("Exiting to world space")
-						character.set_world_position(world_pos)
+						character.set_world_position(world_pos, world_velocity)
 				else:
 					# No docked ship - go to world space
-					print("Exiting to world space (no ship docked)")
-					character.set_world_position(world_pos)
+					character.set_world_position(world_pos, world_velocity)
 
 				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 
@@ -570,10 +528,12 @@ func _check_transitions() -> void:
 
 			# Only transition if ship is docked and character is inside station
 			if inside_station_bounds and is_instance_valid(vehicle) and vehicle.is_docked:
-				print("Entering station from ship interior - local pos: ", local_pos)
+				# Get current proxy velocity (it's already in proxy space, no transformation needed)
+				var proxy_velocity = character.get_proxy_velocity()
+
 				character.exit_vehicle()  # Leave ship
 				character.enter_container()  # Enter station
-				character.set_proxy_position(local_pos)
+				character.set_proxy_position(local_pos, proxy_velocity)
 				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 
 		else:
@@ -585,22 +545,34 @@ func _check_transitions() -> void:
 			var relative_pos = char_world_pos - container_transform.origin
 
 			# Transform relative position to container local space
+			# Note: Container is scaled 1.5x, so we need to account for that
 			var local_pos = container_transform.basis.inverse() * relative_pos
+			# Divide by scale to get actual local coordinates
+			local_pos = local_pos / vehicle_container.scale.x
 
-			# Container entrance at z=40 (exterior front wall), entrance zone OUTSIDE
+			# Container is rotated 180° like the ship
+			# Opening dimensions (unscaled): X: ±15, Y: -20 to +5, Z: at 40
+			# Account for player approaching from ground level (y around -18 to -20 in local space)
+			# Detect entrance while approaching floor edge (still within floor bounds)
 			var at_container_entrance = (
-				abs(local_pos.x) < 15.0 and
-				abs(local_pos.y) < 12.5 and
-				local_pos.z > 35.0 and local_pos.z < 42.0  # Narrow zone outside container
+				abs(local_pos.x) < 16.0 and  # Opening is ±15 units wide
+				local_pos.y > -22.0 and local_pos.y < 7.0 and  # Opening from floor (-20) to top (+5)
+				local_pos.z > 30.0 and local_pos.z < 35.0  # Approaching floor edge from outside
 			)
 
 			if at_container_entrance:
-				print("Entering container from world space - world: ", char_world_pos, " local: ", local_pos)
-				# Place player JUST INSIDE the container to avoid immediate exit
-				# Clamp Z to be inside the valid proxy bounds (< 35.0)
-				var safe_local_pos = Vector3(local_pos.x, local_pos.y, min(local_pos.z, 34.5))
+				# Adjust camera for 180° container rotation
+				if is_instance_valid(dual_camera):
+					dual_camera.base_rotation.y += PI
+
+				# Get current world velocity and transform to container local space
+				var world_velocity = character.get_world_velocity()
+				var local_velocity = container_transform.basis.inverse() * world_velocity
+
+				# Seamlessly enter - use exact transformed position (no clamping)
+				# This matches the exit behavior which is perfectly seamless
 				character.enter_container()
-				character.set_proxy_position(safe_local_pos)
+				character.set_proxy_position(local_pos, local_velocity)
 				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 
 	# Check vehicle docking
@@ -616,11 +588,7 @@ func _check_transitions() -> void:
 
 		if vehicle_in_dock_zone and not vehicle.is_docked:
 			# Vehicle entering dock
-			print("Vehicle entering dock")
 			vehicle.set_docked(true)
-			# TODO: Transfer vehicle state to dock proxy
 		elif not vehicle_in_dock_zone and vehicle.is_docked:
 			# Vehicle leaving dock
-			print("Vehicle leaving dock")
 			vehicle.set_docked(false)
-			# TODO: Transfer vehicle state back to world

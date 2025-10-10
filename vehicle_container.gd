@@ -155,48 +155,55 @@ func _create_container_proxy_interior() -> void:
 	var proxy_space = physics_proxy.get_proxy_interior_space()
 	interior_proxy_colliders = []
 
-	# Container floor collider in proxy space
+	# Container floor collider in proxy space - MATCH EXTERIOR EXACTLY
+	# Width: 60 units (±30), Length: Stop at entrance opening
+	# Opening is at z=40, so floor extends from z=-40 to z=+35 (leaves 5 unit gap for entrance)
+	# Floor positioned at y=-20 to match exterior floor (with 1 unit thickness = 2 * 0.5)
 	var floor_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(floor_shape, Vector3(25, 0.1, 35))
+	PhysicsServer3D.shape_set_data(floor_shape, Vector3(30, 0.5, 37.5))
 
 	var floor_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(floor_body, proxy_space)
 	PhysicsServer3D.body_add_shape(floor_body, floor_shape)
-	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -5, 0)))
+	# Position at y=-20, z=-2.5 so it extends from z=-40 to z=+35
+	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -20, -2.5)))
 	interior_proxy_colliders.append(floor_body)
 
-	# Left wall
+	# Left wall - match floor length (stop at entrance) and height (40 units from floor to ceiling)
 	var left_wall_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.1, 15, 35))
+	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.5, 20, 37.5))
 
 	var left_wall_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(left_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(left_wall_body, proxy_space)
 	PhysicsServer3D.body_add_shape(left_wall_body, left_wall_shape)
-	PhysicsServer3D.body_set_state(left_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(-25, 10, 0)))
+	# Position at y=0 (midpoint between floor and ceiling)
+	PhysicsServer3D.body_set_state(left_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(-30, 0, -2.5)))
 	interior_proxy_colliders.append(left_wall_body)
 
-	# Right wall
+	# Right wall - match floor length (stop at entrance) and height
 	var right_wall_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.1, 15, 35))
+	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.5, 20, 37.5))
 
 	var right_wall_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(right_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(right_wall_body, proxy_space)
 	PhysicsServer3D.body_add_shape(right_wall_body, right_wall_shape)
-	PhysicsServer3D.body_set_state(right_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(25, 10, 0)))
+	# Position at y=0 (midpoint between floor and ceiling)
+	PhysicsServer3D.body_set_state(right_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(30, 0, -2.5)))
 	interior_proxy_colliders.append(right_wall_body)
 
-	# Back wall
+	# Back wall - match exterior width (60 units) and height (40 units), position at z=-40
 	var back_wall_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(25, 15, 0.1))
+	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(30, 20, 0.5))
 
 	var back_wall_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(back_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(back_wall_body, proxy_space)
 	PhysicsServer3D.body_add_shape(back_wall_body, back_wall_shape)
-	PhysicsServer3D.body_set_state(back_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 10, -35)))
+	# Position at y=0 (midpoint between floor and ceiling)
+	PhysicsServer3D.body_set_state(back_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 0, -40)))
 	interior_proxy_colliders.append(back_wall_body)
 
 	# Note: No front wall collider - this is the opening where vehicles can enter

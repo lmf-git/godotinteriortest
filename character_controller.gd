@@ -143,10 +143,10 @@ func _handle_movement(delta: float) -> void:
 		if abs(velocity.z) < 0.1:
 			velocity.z = 0.0
 
-	# Jump (check if on ground)
+	# Jump (only when on ground - use raycast)
 	if jump_pressed:
-		# Check if roughly on ground (small y velocity)
-		if abs(velocity.y) < 2.0:  # More forgiving ground detection
+		var is_grounded = _check_ground(current_body)
+		if is_grounded:
 			velocity.y = jump_force
 
 	# Set velocity
@@ -201,6 +201,31 @@ func _update_character_visual_position() -> void:
 
 	# Character visibility handled by camera system
 	# Don't set visibility here - let dual_camera_view control it
+
+func _check_ground(body: RID) -> bool:
+	# Raycast downward to check if on ground
+	if not body.is_valid():
+		return false
+
+	# Get body position
+	var body_transform: Transform3D = PhysicsServer3D.body_get_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+	var from = body_transform.origin
+	var to = from + Vector3(0, -0.8, 0)  # Ray slightly longer than capsule bottom (0.7 capsule height + 0.1 buffer)
+
+	# Get the space the body is in
+	var space = PhysicsServer3D.body_get_space(body)
+
+	# Create ray parameters
+	var ray_params = PhysicsRayQueryParameters3D.new()
+	ray_params.from = from
+	ray_params.to = to
+	ray_params.exclude = [body]  # Don't hit self
+
+	# Perform raycast using PhysicsDirectSpaceState3D
+	var space_state = PhysicsServer3D.space_get_direct_state(space)
+	var result = space_state.intersect_ray(ray_params)
+
+	return not result.is_empty()
 
 func set_input_direction(direction: Vector3) -> void:
 	input_direction = direction

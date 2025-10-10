@@ -166,11 +166,11 @@ func _create_vehicle_interior_visuals() -> void:
 	var size_scale = 3.0
 
 	# Floor - MATCHES proxy collider size AND position
-	# Proxy collider: half-extents 4.9 * size_scale = total 9.8 * size_scale
+	# Proxy collider: width 3.0 * size_scale (9 units), length 5.0 * size_scale (15 units)
 	# Position at y=-1.4 * size_scale to match exterior floor and proxy collider
 	var floor_mesh := MeshInstance3D.new()
 	floor_mesh.mesh = BoxMesh.new()
-	floor_mesh.mesh.size = Vector3(5.8 * size_scale, 0.1, 9.8 * size_scale)
+	floor_mesh.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
 	floor_mesh.material_override = floor_material
 	floor_mesh.position = Vector3(0, -1.4 * size_scale, 0)  # Match exterior and proxy collider
 	floor_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -179,25 +179,25 @@ func _create_vehicle_interior_visuals() -> void:
 	# Left wall - MATCHES proxy collider length
 	var left_wall := MeshInstance3D.new()
 	left_wall.mesh = BoxMesh.new()
-	left_wall.mesh.size = Vector3(0.1, 2.8 * size_scale, 9.8 * size_scale)
+	left_wall.mesh.size = Vector3(0.1, 2.5 * size_scale * 2, 5.0 * size_scale * 2)
 	left_wall.material_override = wall_material
-	left_wall.position = Vector3(-2.9 * size_scale, 0, 0)
+	left_wall.position = Vector3(-3.0 * size_scale, 0, 0)
 	interior_visuals.add_child(left_wall)
 
 	# Right wall - MATCHES proxy collider length
 	var right_wall := MeshInstance3D.new()
 	right_wall.mesh = BoxMesh.new()
-	right_wall.mesh.size = Vector3(0.1, 2.8 * size_scale, 9.8 * size_scale)
+	right_wall.mesh.size = Vector3(0.1, 2.5 * size_scale * 2, 5.0 * size_scale * 2)
 	right_wall.material_override = wall_material
-	right_wall.position = Vector3(2.9 * size_scale, 0, 0)
+	right_wall.position = Vector3(3.0 * size_scale, 0, 0)
 	interior_visuals.add_child(right_wall)
 
-	# Back wall - MATCHES proxy collider position (at -4.9 * size_scale)
+	# Back wall - MATCHES proxy collider width (at -5.0 * size_scale)
 	var back_wall := MeshInstance3D.new()
 	back_wall.mesh = BoxMesh.new()
-	back_wall.mesh.size = Vector3(5.8 * size_scale, 2.8 * size_scale, 0.1)
+	back_wall.mesh.size = Vector3(3.0 * size_scale * 2, 2.5 * size_scale * 2, 0.1)
 	back_wall.material_override = wall_material
-	back_wall.position = Vector3(0, 0, -4.9 * size_scale)
+	back_wall.position = Vector3(0, 0, -5.0 * size_scale)
 	interior_visuals.add_child(back_wall)
 
 	# Front wall - no wall (opening)
@@ -216,10 +216,11 @@ func _create_proxy_interior_colliders() -> void:
 
 	var size_scale = 3.0
 
-	# Floor collider - LARGER for more walkable space, but still smaller than exterior
-	# Use 4.9 * size_scale (14.7 units total) vs exterior 15 units = 0.3 unit gap each end
+	# Floor collider - Match exterior width exactly
+	# Width: 3.0 * size_scale (9 units) matches exterior walls at ±9
+	# Length: 5.0 * size_scale (15 units) matches exterior 15 units
 	var floor_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(floor_shape, Vector3(2.5 * size_scale, 0.05, 4.9 * size_scale))
+	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
 
 	var floor_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_STATIC)
@@ -228,42 +229,42 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.4 * size_scale, 0)))
 	interior_proxy_colliders.append(floor_body)
 
-	# Left wall collider - matches floor length
+	# Left wall collider - matches floor length and width
 	var left_wall_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.05, 1.25 * size_scale, 4.9 * size_scale))
+	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.05, 1.25 * size_scale, 5.0 * size_scale))
 
 	var left_wall_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(left_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(left_wall_body, proxy_space)
 	PhysicsServer3D.body_add_shape(left_wall_body, left_wall_shape)
-	PhysicsServer3D.body_set_state(left_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(-2.5 * size_scale, 0, 0)))
+	PhysicsServer3D.body_set_state(left_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(-3.0 * size_scale, 0, 0)))
 	interior_proxy_colliders.append(left_wall_body)
 
-	# Right wall collider - matches floor length
+	# Right wall collider - matches floor length and width
 	var right_wall_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.05, 1.25 * size_scale, 4.9 * size_scale))
+	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.05, 1.25 * size_scale, 5.0 * size_scale))
 
 	var right_wall_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(right_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(right_wall_body, proxy_space)
 	PhysicsServer3D.body_add_shape(right_wall_body, right_wall_shape)
-	PhysicsServer3D.body_set_state(right_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(2.5 * size_scale, 0, 0)))
+	PhysicsServer3D.body_set_state(right_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(3.0 * size_scale, 0, 0)))
 	interior_proxy_colliders.append(right_wall_body)
 
-	# Back wall collider - matches floor position
+	# Back wall collider - matches floor width
 	var back_wall_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(2.5 * size_scale, 1.25 * size_scale, 0.05))
+	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(3.0 * size_scale, 1.25 * size_scale, 0.05))
 
 	var back_wall_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(back_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(back_wall_body, proxy_space)
 	PhysicsServer3D.body_add_shape(back_wall_body, back_wall_shape)
-	PhysicsServer3D.body_set_state(back_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 0, -4.9 * size_scale)))
+	PhysicsServer3D.body_set_state(back_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 0, -5.0 * size_scale)))
 	interior_proxy_colliders.append(back_wall_body)
 
-	# Ceiling collider - matches floor length
+	# Ceiling collider - matches floor dimensions
 	var ceiling_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(2.5 * size_scale, 0.05, 4.9 * size_scale))
+	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
 
 	var ceiling_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(ceiling_body, PhysicsServer3D.BODY_MODE_STATIC)
@@ -321,8 +322,12 @@ func _process(_delta: float) -> void:
 		if container and container.exterior_body:
 			var container_transform = container.exterior_body.global_transform
 
+			# Account for container scale when transforming to world space
+			var unscaled_origin = dock_transform.origin * container.scale.x
+			var unscaled_transform = Transform3D(dock_transform.basis, unscaled_origin)
+
 			# Transform dock proxy position by container transformation
-			var world_transform = container_transform * dock_transform
+			var world_transform = container_transform * unscaled_transform
 			exterior_body.global_transform = world_transform
 	elif exterior_body:
 		# Ship in world space: exterior_body controls its own position (physics drives it)
@@ -332,9 +337,10 @@ func _process(_delta: float) -> void:
 
 func apply_thrust(direction: Vector3, force: float) -> void:
 	if is_docked and dock_proxy_body.is_valid():
-		# Apply thrust in dock proxy
+		# Apply thrust in dock proxy using impulses
+		var impulse = direction * force * get_process_delta_time()
 		var current_vel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
-		var new_vel = current_vel + direction * force
+		var new_vel = current_vel + impulse
 		PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, new_vel)
 	elif exterior_body:
 		# Apply thrust in world
@@ -342,9 +348,10 @@ func apply_thrust(direction: Vector3, force: float) -> void:
 
 func apply_rotation(axis: Vector3, torque: float) -> void:
 	if is_docked and dock_proxy_body.is_valid():
-		# Apply rotation in dock proxy
+		# Apply rotation in dock proxy using angular impulses
+		var angular_impulse = axis * torque * get_process_delta_time()
 		var current_angvel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
-		var new_angvel = current_angvel + axis * torque
+		var new_angvel = current_angvel + angular_impulse
 		PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, new_angvel)
 	elif exterior_body:
 		# Apply rotation in world
@@ -356,6 +363,60 @@ func toggle_magnetism() -> void:
 		physics_proxy.set_proxy_interior_gravity(magnetism_enabled)
 
 func set_docked(docked: bool) -> void:
+	if docked and not is_docked:
+		# Ship is entering dock - transfer position from world to dock proxy
+		if exterior_body and dock_proxy_body.is_valid():
+			# Get container to transform world position to container local space
+			var container = get_parent().get_node_or_null("VehicleContainer")
+			if container and container.exterior_body:
+				var container_transform = container.exterior_body.global_transform
+				var world_transform = exterior_body.global_transform
+
+				# Transform world position to container local space
+				var relative_transform = container_transform.inverse() * world_transform
+
+				# Account for container scale (1.5x)
+				var scaled_origin = relative_transform.origin / container.scale.x
+				var scaled_transform = Transform3D(relative_transform.basis, scaled_origin)
+
+				# Set dock proxy body to this local position
+				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, scaled_transform)
+
+				# Copy velocity
+				var world_velocity = exterior_body.linear_velocity
+				var local_velocity = container_transform.basis.inverse() * world_velocity
+				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, local_velocity)
+
+				# Copy angular velocity
+				var world_angvel = exterior_body.angular_velocity
+				var local_angvel = container_transform.basis.inverse() * world_angvel
+				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, local_angvel)
+	elif not docked and is_docked:
+		# Ship is leaving dock - transfer position from dock proxy to world
+		if exterior_body and dock_proxy_body.is_valid():
+			var container = get_parent().get_node_or_null("VehicleContainer")
+			if container and container.exterior_body:
+				var container_transform = container.exterior_body.global_transform
+				var dock_transform = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+
+				# Transform dock proxy position to world space (accounting for scale)
+				var unscaled_origin = dock_transform.origin * container.scale.x
+				var unscaled_transform = Transform3D(dock_transform.basis, unscaled_origin)
+				var world_transform = container_transform * unscaled_transform
+
+				# Set exterior body to this world position
+				exterior_body.global_transform = world_transform
+
+				# Copy velocity
+				var local_velocity = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
+				var world_velocity = container_transform.basis * local_velocity
+				exterior_body.linear_velocity = world_velocity
+
+				# Copy angular velocity
+				var local_angvel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
+				var world_angvel = container_transform.basis * local_angvel
+				exterior_body.angular_velocity = world_angvel
+
 	is_docked = docked
 
 func _exit_tree() -> void:

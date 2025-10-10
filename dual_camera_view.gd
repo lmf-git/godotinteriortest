@@ -119,10 +119,10 @@ func _create_proxy_interior_scene(viewport: SubViewport) -> void:
 	wall_material.metallic = 0.0
 	wall_material.roughness = 0.8
 
-	# Floor - MATCHES proxy collider (9.8 * size_scale = 29.4 units)
+	# Floor - MATCHES proxy collider (3.0 * size_scale * 2 = 18 units wide, 5.0 * size_scale * 2 = 30 units long)
 	var floor_mesh := MeshInstance3D.new()
 	floor_mesh.mesh = BoxMesh.new()
-	floor_mesh.mesh.size = Vector3(5 * size_scale, 0.1, 9.8 * size_scale)
+	floor_mesh.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
 	floor_mesh.material_override = floor_material
 	floor_mesh.position = Vector3(0, -1.4 * size_scale, 0)
 	proxy_interior_visuals.add_child(floor_mesh)
@@ -130,31 +130,31 @@ func _create_proxy_interior_scene(viewport: SubViewport) -> void:
 	# Left wall - MATCHES proxy collider length
 	var left_wall := MeshInstance3D.new()
 	left_wall.mesh = BoxMesh.new()
-	left_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 9.8 * size_scale)
+	left_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
 	left_wall.material_override = wall_material
-	left_wall.position = Vector3(-2.5 * size_scale, 0, 0)
+	left_wall.position = Vector3(-3.0 * size_scale, 0, 0)
 	proxy_interior_visuals.add_child(left_wall)
 
 	# Right wall - MATCHES proxy collider length
 	var right_wall := MeshInstance3D.new()
 	right_wall.mesh = BoxMesh.new()
-	right_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 9.8 * size_scale)
+	right_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
 	right_wall.material_override = wall_material
-	right_wall.position = Vector3(2.5 * size_scale, 0, 0)
+	right_wall.position = Vector3(3.0 * size_scale, 0, 0)
 	proxy_interior_visuals.add_child(right_wall)
 
 	# Back wall - MATCHES proxy collider position
 	var back_wall := MeshInstance3D.new()
 	back_wall.mesh = BoxMesh.new()
-	back_wall.mesh.size = Vector3(5 * size_scale, 2.5 * size_scale, 0.1)
+	back_wall.mesh.size = Vector3(3.0 * size_scale * 2, 2.5 * size_scale, 0.1)
 	back_wall.material_override = wall_material
-	back_wall.position = Vector3(0, 0, -4.9 * size_scale)
+	back_wall.position = Vector3(0, 0, -5.0 * size_scale)
 	proxy_interior_visuals.add_child(back_wall)
 
 	# Ceiling - MATCHES proxy collider
 	var ceiling := MeshInstance3D.new()
 	ceiling.mesh = BoxMesh.new()
-	ceiling.mesh.size = Vector3(5 * size_scale, 0.1, 9.8 * size_scale)
+	ceiling.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
 	ceiling.material_override = wall_material
 	ceiling.position = Vector3(0, 1.4 * size_scale, 0)
 	proxy_interior_visuals.add_child(ceiling)
@@ -197,44 +197,44 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 	wall_material.metallic = 0.1
 	wall_material.roughness = 0.7
 
-	# Floor
+	# Floor - Match proxy collider: 60 wide (±30), 75 long (stops at z=35), positioned at y=-20
 	var floor_mesh := MeshInstance3D.new()
 	floor_mesh.mesh = BoxMesh.new()
-	floor_mesh.mesh.size = Vector3(50, 0.2, 70)
+	floor_mesh.mesh.size = Vector3(60, 1, 75)
 	floor_mesh.material_override = floor_material
-	floor_mesh.position = Vector3(0, -5, 0)
+	floor_mesh.position = Vector3(0, -20, -2.5)
 	proxy_interior_visuals.add_child(floor_mesh)
 
-	# Left wall
+	# Left wall - Match proxy collider (40 units tall, stops at entrance)
 	var left_wall := MeshInstance3D.new()
 	left_wall.mesh = BoxMesh.new()
-	left_wall.mesh.size = Vector3(0.2, 30, 70)
+	left_wall.mesh.size = Vector3(1, 40, 75)
 	left_wall.material_override = wall_material
-	left_wall.position = Vector3(-25, 10, 0)
+	left_wall.position = Vector3(-30, 0, -2.5)
 	proxy_interior_visuals.add_child(left_wall)
 
-	# Right wall
+	# Right wall - Match proxy collider (40 units tall, stops at entrance)
 	var right_wall := MeshInstance3D.new()
 	right_wall.mesh = BoxMesh.new()
-	right_wall.mesh.size = Vector3(0.2, 30, 70)
+	right_wall.mesh.size = Vector3(1, 40, 75)
 	right_wall.material_override = wall_material
-	right_wall.position = Vector3(25, 10, 0)
+	right_wall.position = Vector3(30, 0, -2.5)
 	proxy_interior_visuals.add_child(right_wall)
 
-	# Back wall
+	# Back wall - Match proxy collider width (60) and height (40), position at z=-40
 	var back_wall := MeshInstance3D.new()
 	back_wall.mesh = BoxMesh.new()
-	back_wall.mesh.size = Vector3(50, 30, 0.2)
+	back_wall.mesh.size = Vector3(60, 40, 1)
 	back_wall.material_override = wall_material
-	back_wall.position = Vector3(0, 10, -35)
+	back_wall.position = Vector3(0, 0, -40)
 	proxy_interior_visuals.add_child(back_wall)
 
-	# Ceiling
+	# Ceiling - Match floor dimensions (stops at entrance), positioned at y=+20
 	var ceiling := MeshInstance3D.new()
 	ceiling.mesh = BoxMesh.new()
-	ceiling.mesh.size = Vector3(50, 0.2, 70)
+	ceiling.mesh.size = Vector3(60, 1, 75)
 	ceiling.material_override = wall_material
-	ceiling.position = Vector3(0, 25, 0)
+	ceiling.position = Vector3(0, 20, -2.5)
 	proxy_interior_visuals.add_child(ceiling)
 
 	# NO LIGHT - wireframe mode doesn't need lighting
@@ -255,6 +255,22 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 	character_proxy_visual.material_override = char_material
 
 	proxy_interior_visuals.add_child(character_proxy_visual)
+
+	# Create vehicle proxy visual (will be updated to follow docked vehicle position)
+	var vehicle_proxy_visual = MeshInstance3D.new()
+	vehicle_proxy_visual.name = "VehicleProxyVisual"
+	var vehicle_mesh = BoxMesh.new()
+	vehicle_mesh.size = Vector3(18, 9, 30)  # Ship size (3x scale)
+	vehicle_proxy_visual.mesh = vehicle_mesh
+
+	var vehicle_material = StandardMaterial3D.new()
+	vehicle_material.albedo_color = Color(0.2, 0.2, 1.0)
+	vehicle_material.emission_enabled = true
+	vehicle_material.emission = Color(0.1, 0.1, 0.5)
+	vehicle_material.emission_energy_multiplier = 1.0
+	vehicle_proxy_visual.material_override = vehicle_material
+
+	proxy_interior_visuals.add_child(vehicle_proxy_visual)
 
 func _setup_cameras() -> void:
 	# Main FPS camera (interior proxy view) - uses default viewport
@@ -534,12 +550,14 @@ func _update_dock_interior_camera() -> void:
 
 	# Camera is in the proxy interior space (stable coordinates)
 	# Position camera at back of station interior, elevated
-	var cam_pos = Vector3(0, 15, -30)  # Back of station, elevated view
+	# Floor now extends to z=±40, so position at z=-35
+	var cam_pos = Vector3(0, 15, -35)  # Back of station, elevated view
 
 	dock_interior_camera.position = cam_pos
 
 	# Look toward the entrance/dock bay opening
-	var look_target = Vector3(0, 5, 30)  # Front opening
+	# Floor extends to z=+40
+	var look_target = Vector3(0, 5, 35)  # Front opening
 	dock_interior_camera.look_at(look_target, Vector3.UP)
 
 func get_forward_direction() -> Vector3:
@@ -589,11 +607,57 @@ func _update_proxy_character_visuals() -> void:
 			if character.is_in_vehicle:
 				ship_char_visual.position = proxy_pos
 
-	# Update character visual in station interior viewport (shares same viewport world)
+	# Update character visual in station interior viewport
 	if is_instance_valid(dock_interior_viewport):
 		var station_char_visual = dock_interior_viewport.get_node_or_null("StationProxyInteriorVisuals/CharacterProxyVisual")
 		if station_char_visual:
-			# Only show if character is in container
-			station_char_visual.visible = character.is_in_container
+			# Show character if in container OR if in docked vehicle
+			var show_character = character.is_in_container or (character.is_in_vehicle and is_instance_valid(vehicle) and vehicle.is_docked)
+			station_char_visual.visible = show_character
+
 			if character.is_in_container:
 				station_char_visual.position = proxy_pos
+			elif character.is_in_vehicle and is_instance_valid(vehicle) and vehicle.is_docked:
+				# Character is in docked vehicle - show in vehicle's dock position
+				# Transform proxy pos through vehicle to station space
+				if vehicle.exterior_body:
+					var vehicle_world_pos = vehicle.exterior_body.global_position
+					var vehicle_basis = vehicle.exterior_body.global_transform.basis
+					var container_pos = vehicle_container.exterior_body.global_position
+					var container_basis = vehicle_container.exterior_body.global_transform.basis
+
+					# Character world position
+					var char_world_pos = vehicle_world_pos + vehicle_basis * proxy_pos
+
+					# Transform to container local space
+					var relative_pos = char_world_pos - container_pos
+					var container_local_pos = container_basis.inverse() * relative_pos
+					# Divide by container scale
+					container_local_pos = container_local_pos / vehicle_container.scale.x
+					# No Y offset needed - floors match!
+
+					station_char_visual.position = container_local_pos
+
+		# Update vehicle visual in station interior viewport
+		var station_vehicle_visual = dock_interior_viewport.get_node_or_null("StationProxyInteriorVisuals/VehicleProxyVisual")
+		if station_vehicle_visual:
+			# Show vehicle if it's docked
+			station_vehicle_visual.visible = is_instance_valid(vehicle) and vehicle.is_docked
+			if is_instance_valid(vehicle) and vehicle.is_docked and vehicle.exterior_body:
+				# Transform vehicle position to station proxy space
+				var vehicle_world_pos = vehicle.exterior_body.global_position
+				var container_pos = vehicle_container.exterior_body.global_position
+				var container_basis = vehicle_container.exterior_body.global_transform.basis
+
+				# Transform to container local space
+				var relative_pos = vehicle_world_pos - container_pos
+				var container_local_pos = container_basis.inverse() * relative_pos
+				# Divide by container scale
+				container_local_pos = container_local_pos / vehicle_container.scale.x
+				# No Y offset needed - floors match!
+
+				station_vehicle_visual.position = container_local_pos
+				# Copy vehicle rotation
+				var vehicle_basis = vehicle.exterior_body.global_transform.basis
+				var relative_basis = container_basis.inverse() * vehicle_basis
+				station_vehicle_visual.transform.basis = relative_basis

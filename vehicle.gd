@@ -322,12 +322,8 @@ func _process(_delta: float) -> void:
 		if container and container.exterior_body:
 			var container_transform = container.exterior_body.global_transform
 
-			# Account for container scale when transforming to world space
-			var unscaled_origin = dock_transform.origin * container.scale.x
-			var unscaled_transform = Transform3D(dock_transform.basis, unscaled_origin)
-
 			# Transform dock proxy position by container transformation
-			var world_transform = container_transform * unscaled_transform
+			var world_transform = container_transform * dock_transform
 			exterior_body.global_transform = world_transform
 	elif exterior_body:
 		# Ship in world space: exterior_body controls its own position (physics drives it)
@@ -338,10 +334,15 @@ func _process(_delta: float) -> void:
 func apply_thrust(direction: Vector3, force: float) -> void:
 	if is_docked and dock_proxy_body.is_valid():
 		# Apply thrust in dock proxy using impulses
-		var impulse = direction * force * get_process_delta_time()
-		var current_vel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
-		var new_vel = current_vel + impulse
-		PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, new_vel)
+		# Direction comes in world space, need to transform to container local space
+		var container = get_parent().get_node_or_null("VehicleContainer")
+		if container and container.exterior_body:
+			var container_transform = container.exterior_body.global_transform
+			var local_direction = container_transform.basis.inverse() * direction
+			var impulse = local_direction * force * get_process_delta_time()
+			var current_vel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
+			var new_vel = current_vel + impulse
+			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, new_vel)
 	elif exterior_body:
 		# Apply thrust in world
 		exterior_body.apply_central_force(direction * force)
@@ -349,10 +350,15 @@ func apply_thrust(direction: Vector3, force: float) -> void:
 func apply_rotation(axis: Vector3, torque: float) -> void:
 	if is_docked and dock_proxy_body.is_valid():
 		# Apply rotation in dock proxy using angular impulses
-		var angular_impulse = axis * torque * get_process_delta_time()
-		var current_angvel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
-		var new_angvel = current_angvel + angular_impulse
-		PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, new_angvel)
+		# Axis comes in world space, need to transform to container local space
+		var container = get_parent().get_node_or_null("VehicleContainer")
+		if container and container.exterior_body:
+			var container_transform = container.exterior_body.global_transform
+			var local_axis = container_transform.basis.inverse() * axis
+			var angular_impulse = local_axis * torque * get_process_delta_time()
+			var current_angvel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
+			var new_angvel = current_angvel + angular_impulse
+			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, new_angvel)
 	elif exterior_body:
 		# Apply rotation in world
 		exterior_body.apply_torque(axis * torque)
@@ -375,12 +381,8 @@ func set_docked(docked: bool) -> void:
 				# Transform world position to container local space
 				var relative_transform = container_transform.inverse() * world_transform
 
-				# Account for container scale (1.5x)
-				var scaled_origin = relative_transform.origin / container.scale.x
-				var scaled_transform = Transform3D(relative_transform.basis, scaled_origin)
-
 				# Set dock proxy body to this local position
-				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, scaled_transform)
+				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, relative_transform)
 
 				# Copy velocity
 				var world_velocity = exterior_body.linear_velocity
@@ -399,10 +401,8 @@ func set_docked(docked: bool) -> void:
 				var container_transform = container.exterior_body.global_transform
 				var dock_transform = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-				# Transform dock proxy position to world space (accounting for scale)
-				var unscaled_origin = dock_transform.origin * container.scale.x
-				var unscaled_transform = Transform3D(dock_transform.basis, unscaled_origin)
-				var world_transform = container_transform * unscaled_transform
+				# Transform dock proxy position to world space
+				var world_transform = container_transform * dock_transform
 
 				# Set exterior body to this world position
 				exterior_body.global_transform = world_transform

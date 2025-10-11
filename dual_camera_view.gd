@@ -180,6 +180,9 @@ func _create_proxy_interior_scene(viewport: SubViewport) -> void:
 
 func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 	# Create visual geometry for station interior in proxy space
+	# Container is 5x ship size (size_scale = 15.0)
+
+	var size_scale = 15.0  # 5x the ship's 3x scale
 
 	# Create container for proxy visuals
 	var proxy_interior_visuals = Node3D.new()
@@ -197,44 +200,44 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 	wall_material.metallic = 0.1
 	wall_material.roughness = 0.7
 
-	# Floor - Match proxy collider: 60 wide (±30), 75 long (stops at z=35), positioned at y=-20
+	# Floor - MATCHES proxy collider (3.0 * size_scale * 2 = 54 units wide, 5.0 * size_scale * 2 = 90 units long)
 	var floor_mesh := MeshInstance3D.new()
 	floor_mesh.mesh = BoxMesh.new()
-	floor_mesh.mesh.size = Vector3(60, 1, 75)
+	floor_mesh.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
 	floor_mesh.material_override = floor_material
-	floor_mesh.position = Vector3(0, -20, -2.5)
+	floor_mesh.position = Vector3(0, -1.4 * size_scale, 0)
 	proxy_interior_visuals.add_child(floor_mesh)
 
-	# Left wall - Match proxy collider (40 units tall, stops at entrance)
+	# Left wall - MATCHES proxy collider length
 	var left_wall := MeshInstance3D.new()
 	left_wall.mesh = BoxMesh.new()
-	left_wall.mesh.size = Vector3(1, 40, 75)
+	left_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
 	left_wall.material_override = wall_material
-	left_wall.position = Vector3(-30, 0, -2.5)
+	left_wall.position = Vector3(-3.0 * size_scale, 0, 0)
 	proxy_interior_visuals.add_child(left_wall)
 
-	# Right wall - Match proxy collider (40 units tall, stops at entrance)
+	# Right wall - MATCHES proxy collider length
 	var right_wall := MeshInstance3D.new()
 	right_wall.mesh = BoxMesh.new()
-	right_wall.mesh.size = Vector3(1, 40, 75)
+	right_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
 	right_wall.material_override = wall_material
-	right_wall.position = Vector3(30, 0, -2.5)
+	right_wall.position = Vector3(3.0 * size_scale, 0, 0)
 	proxy_interior_visuals.add_child(right_wall)
 
-	# Back wall - Match proxy collider width (60) and height (40), position at z=-40
+	# Back wall - MATCHES proxy collider position
 	var back_wall := MeshInstance3D.new()
 	back_wall.mesh = BoxMesh.new()
-	back_wall.mesh.size = Vector3(60, 40, 1)
+	back_wall.mesh.size = Vector3(3.0 * size_scale * 2, 2.5 * size_scale, 0.1)
 	back_wall.material_override = wall_material
-	back_wall.position = Vector3(0, 0, -40)
+	back_wall.position = Vector3(0, 0, -5.0 * size_scale)
 	proxy_interior_visuals.add_child(back_wall)
 
-	# Ceiling - Match floor dimensions (stops at entrance), positioned at y=+20
+	# Ceiling - MATCHES proxy collider
 	var ceiling := MeshInstance3D.new()
 	ceiling.mesh = BoxMesh.new()
-	ceiling.mesh.size = Vector3(60, 1, 75)
+	ceiling.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
 	ceiling.material_override = wall_material
-	ceiling.position = Vector3(0, 20, -2.5)
+	ceiling.position = Vector3(0, 1.4 * size_scale, 0)
 	proxy_interior_visuals.add_child(ceiling)
 
 	# NO LIGHT - wireframe mode doesn't need lighting
@@ -260,7 +263,8 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 	var vehicle_proxy_visual = MeshInstance3D.new()
 	vehicle_proxy_visual.name = "VehicleProxyVisual"
 	var vehicle_mesh = BoxMesh.new()
-	vehicle_mesh.size = Vector3(18, 9, 30)  # Ship size (3x scale)
+	# Ship size: 3x scale (18 wide, 9 tall, 30 long)
+	vehicle_mesh.size = Vector3(18, 9, 30)
 	vehicle_proxy_visual.mesh = vehicle_mesh
 
 	var vehicle_material = StandardMaterial3D.new()
@@ -550,14 +554,15 @@ func _update_dock_interior_camera() -> void:
 
 	# Camera is in the proxy interior space (stable coordinates)
 	# Position camera at back of station interior, elevated
-	# Floor now extends to z=±40, so position at z=-35
-	var cam_pos = Vector3(0, 15, -35)  # Back of station, elevated view
+	# Container size_scale = 15.0, so interior extends from z=-75 to z=+75
+	var size_scale = 15.0
+	var cam_pos = Vector3(0, 3 * size_scale, -4.0 * size_scale)  # Back of station, elevated view
 
 	dock_interior_camera.position = cam_pos
 
 	# Look toward the entrance/dock bay opening
-	# Floor extends to z=+40
-	var look_target = Vector3(0, 5, 35)  # Front opening
+	# Floor extends to z=+75
+	var look_target = Vector3(0, 0, 4.0 * size_scale)  # Front opening
 	dock_interior_camera.look_at(look_target, Vector3.UP)
 
 func get_forward_direction() -> Vector3:
@@ -632,9 +637,6 @@ func _update_proxy_character_visuals() -> void:
 					# Transform to container local space
 					var relative_pos = char_world_pos - container_pos
 					var container_local_pos = container_basis.inverse() * relative_pos
-					# Divide by container scale
-					container_local_pos = container_local_pos / vehicle_container.scale.x
-					# No Y offset needed - floors match!
 
 					station_char_visual.position = container_local_pos
 
@@ -643,21 +645,10 @@ func _update_proxy_character_visuals() -> void:
 		if station_vehicle_visual:
 			# Show vehicle if it's docked
 			station_vehicle_visual.visible = is_instance_valid(vehicle) and vehicle.is_docked
-			if is_instance_valid(vehicle) and vehicle.is_docked and vehicle.exterior_body:
-				# Transform vehicle position to station proxy space
-				var vehicle_world_pos = vehicle.exterior_body.global_position
-				var container_pos = vehicle_container.exterior_body.global_position
-				var container_basis = vehicle_container.exterior_body.global_transform.basis
+			if is_instance_valid(vehicle) and vehicle.is_docked and vehicle.dock_proxy_body.is_valid():
+				# Get position directly from dock proxy body (already in container local space)
+				var dock_transform: Transform3D = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-				# Transform to container local space
-				var relative_pos = vehicle_world_pos - container_pos
-				var container_local_pos = container_basis.inverse() * relative_pos
-				# Divide by container scale
-				container_local_pos = container_local_pos / vehicle_container.scale.x
-				# No Y offset needed - floors match!
-
-				station_vehicle_visual.position = container_local_pos
-				# Copy vehicle rotation
-				var vehicle_basis = vehicle.exterior_body.global_transform.basis
-				var relative_basis = container_basis.inverse() * vehicle_basis
-				station_vehicle_visual.transform.basis = relative_basis
+				# Dock proxy body is already in container local space, so we can use it directly
+				station_vehicle_visual.position = dock_transform.origin
+				station_vehicle_visual.transform.basis = dock_transform.basis

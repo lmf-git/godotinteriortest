@@ -198,6 +198,7 @@ PLAYER MOVEMENT:
   WASD - Move
   Space - Jump
   Mouse - Look around
+  O - Toggle Third Person Camera
 
 SHIP CONTROLS (when inside ship):
   T - Forward    | R - Raise
@@ -446,9 +447,11 @@ func _check_transitions() -> void:
 
 				# Check if ship is docked and player exit position is inside container bounds
 				var should_enter_container = false
+				var container_transform: Transform3D  # Declare outside if block so it's in scope for later use
+
 				if is_instance_valid(vehicle_container) and vehicle.is_docked:
 					# Transform world position to container local space
-					var container_transform = vehicle_container.exterior_body.global_transform
+					container_transform = vehicle_container.exterior_body.global_transform
 					var relative_pos = world_pos - container_transform.origin
 					var local_pos = container_transform.basis.inverse() * relative_pos
 
@@ -465,13 +468,24 @@ func _check_transitions() -> void:
 				if should_enter_container:
 					# Exit position is inside container - enter container proxy space
 					# Don't adjust camera - we're staying in proxy space (ship -> container)
-					var container_transform = vehicle_container.exterior_body.global_transform
-					var relative_pos = world_pos - container_transform.origin
-					var local_pos = container_transform.basis.inverse() * relative_pos
 					var local_velocity = container_transform.basis.inverse() * world_velocity
 
+					# CRITICAL: Check if ship is docked
+					# If docked: ship and station share the same proxy space (no Y adjustment needed)
+					# If not docked: ship floor at y=-4.2, station floor at y=50 (need Y adjustment)
+					var station_proxy_pos: Vector3
+					if vehicle.is_docked:
+						# Ship is docked: player is already in proxy_interior_space at correct Y
+						# No coordinate conversion needed - just use current proxy position
+						station_proxy_pos = proxy_pos
+					else:
+						# Ship is free-flying: player in ship proxy (floor y=-4.2), need to convert to station proxy (floor y=50)
+						var height_above_ship_floor = proxy_pos.y - (-4.2)
+						var station_proxy_y = VehicleContainer.STATION_PROXY_Y_OFFSET + height_above_ship_floor
+						station_proxy_pos = Vector3(proxy_pos.x, station_proxy_y, proxy_pos.z)
+
 					character.enter_container()
-					character.set_proxy_position(local_pos, local_velocity)
+					character.set_proxy_position(station_proxy_pos, local_velocity)
 				else:
 					# Exit position is outside container OR ship not docked - exit to world space
 					# Adjust camera for 180° ship rotation - subtract PI from yaw
@@ -541,9 +555,14 @@ func _check_transitions() -> void:
 				var world_velocity = container_transform.basis * proxy_velocity
 
 				# Convert from proxy coordinates to container local coordinates
-				# Container proxy floor is at y=-20, exterior floor is at y=-20
-				# No Y offset needed - they match!
-				var local_pos = proxy_pos
+				# Station proxy floor: at y=50 in proxy_interior_space (STATION_PROXY_Y_OFFSET)
+				# Container exterior floor: at y=-21 in container local space
+				# Need to convert: height above proxy floor → height above container floor
+				var proxy_floor_y = VehicleContainer.STATION_PROXY_Y_OFFSET  # 50.0
+				var container_floor_y = -21.0  # Container exterior floor
+				var height_above_proxy_floor = proxy_pos.y - proxy_floor_y
+				var local_y = container_floor_y + height_above_proxy_floor
+				var local_pos = Vector3(proxy_pos.x, local_y, proxy_pos.z)
 
 				# Transform local position to world position
 				var world_pos = container_transform.origin + container_transform.basis * local_pos
@@ -580,17 +599,7 @@ func _check_transitions() -> void:
 		elif character.is_in_vehicle:
 			# Check if character (in ship interior) entered station/container zone
 			# This happens when ship is docked and player walks from ship into station
-			# Character world position comes from vehicle transform + proxy position
-			var char_world_pos = character.character_visual.global_position
-			var container_transform = vehicle_container.exterior_body.global_transform
-
-			# Get relative position (vector from container to character)
-			var relative_pos = char_world_pos - container_transform.origin
-
-			# Transform relative position to container local space
-			var local_pos = container_transform.basis.inverse() * relative_pos
-
-			# Get ship proxy position for debugging
+			# Get ship proxy position
 			var ship_proxy_pos = character.get_proxy_position()
 
 			# Check if player walked OUT of the ship's front opening
@@ -598,43 +607,46 @@ func _check_transitions() -> void:
 			# Only transition when player walks PAST the ship's front edge
 			var exited_ship_front = ship_proxy_pos.z > 15.0
 
-			# Also check we're still inside the container (not outside)
-			# Container is 5x ship: 90 wide (±45), 45 tall (floor -21 to ceiling +21), 150 long (±75)
-			var inside_container_bounds = (
-				abs(local_pos.x) < 45.0 and
-				local_pos.y > -21.0 and local_pos.y < 21.0 and
-				local_pos.z > -75.0 and local_pos.z < 75.0
-			)
-
-			# Debug logging - debounced
-			if is_instance_valid(vehicle) and vehicle.is_docked:
-				_debounced_log("SHIP->STATION", "Position check", {
-					"ship_z": ship_proxy_pos.z,
-					"container_x": local_pos.x,
-					"container_y": local_pos.y,
-					"container_z": local_pos.z
+			# Debug logging - debounced (only when ship is docked)
+			if is_instance_valid(vehicle) and vehicle.is_docked and exited_ship_front:
+				_debounced_log("SHIP->STATION", "Player exited ship front", {
+					"ship_proxy_x": ship_proxy_pos.x,
+					"ship_proxy_y": ship_proxy_pos.y,
+					"ship_proxy_z": ship_proxy_pos.z
 				})
 
-			# Only transition if ship is docked AND player walked out the ship front AND still inside container
-			if exited_ship_front and inside_container_bounds and is_instance_valid(vehicle) and vehicle.is_docked:
+			# Only transition if ship is docked AND player walked out the ship front
+			if exited_ship_front and is_instance_valid(vehicle) and vehicle.is_docked:
 				# Get current proxy velocity (velocity stays the same in proxy space)
 				var proxy_velocity = character.get_proxy_velocity()
 
-				# CRITICAL: Station proxy is at different Y than ship proxy!
-				# Ship floor: y=-4.2 in proxy space
-				# Station floor: y=50 in proxy space (VehicleContainer.STATION_PROXY_Y_OFFSET)
-				# Player is currently at ship proxy Y, need to adjust to station proxy Y
-				var ship_proxy_pos = character.get_proxy_position()
+				# CRITICAL: When ship is docked, both ship and station share proxy_interior_space
+				# Ship's dock_proxy_body moves around, and floor moves with it
+				# Need to calculate where ship floor actually is based on dock_proxy_body position
 
-				# Adjust Y position: keep relative position to floor the same
-				# Player at ship_proxy_pos.y is (ship_proxy_pos.y - (-4.2)) units above ship floor
-				# Place player at same height above station floor
-				var height_above_ship_floor = ship_proxy_pos.y - (-4.2)
-				var station_proxy_y = VehicleContainer.STATION_PROXY_Y_OFFSET + height_above_ship_floor
+				# Get ship's dock_proxy_body position
+				var ship_dock_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+				var ship_dock_pos = ship_dock_transform.origin
 
-				# Keep X and Z from current proxy position (they're relative to ship center)
-				# Station is much larger, so player will be near entrance
+				# Ship floor is at dock_proxy_body.Y + (-1.4 * size_scale) where size_scale = 3.0
+				var ship_floor_offset = -1.4 * 3.0  # -4.2
+				var ship_floor_y = ship_dock_pos.y + ship_floor_offset
+
+				# Station floor is always at Y=50
+				var station_floor_y = VehicleContainer.STATION_PROXY_Y_OFFSET  # 50.0
+
+				# Calculate height above ship floor, maintain that height above station floor
+				var height_above_ship_floor = ship_proxy_pos.y - ship_floor_y
+				var station_proxy_y = station_floor_y + height_above_ship_floor
 				var station_proxy_pos = Vector3(ship_proxy_pos.x, station_proxy_y, ship_proxy_pos.z)
+
+				print("[TRANSITION] Player exiting ship to station")
+				print("  Ship dock pos: ", ship_dock_pos)
+				print("  Ship floor Y: ", ship_floor_y)
+				print("  Ship proxy pos: ", ship_proxy_pos)
+				print("  Height above ship floor: ", height_above_ship_floor)
+				print("  Station proxy pos: ", station_proxy_pos)
+				print("  Station floor at Y=50, player should be at Y=", station_proxy_y)
 
 				character.exit_vehicle()  # Leave ship
 				character.enter_container()  # Enter station
@@ -655,14 +667,18 @@ func _check_transitions() -> void:
 			# Container is rotated 180° like the ship, 5x ship size
 			# Container size_scale = 15.0: floor at y=-21, entrance at z=+75
 			# Opening dimensions: X: ±45, Y: -21 to +21
-			# Detect entrance while approaching floor edge
+			# Detect entrance ONLY when player is actually on the floor, not at the edge
+			# Container proxy floor extends from z=-75 to z=+75 in proxy space
+			# Pull back detection to z=70 so player has stepped onto floor before transition
 			var at_container_entrance = (
 				abs(local_pos.x) < 45.0 and
 				local_pos.y > -23.0 and local_pos.y < 23.0 and
-				local_pos.z > 70.0 and local_pos.z < 75.0  # Approaching floor edge from outside
+				local_pos.z > 65.0 and local_pos.z < 70.0  # Only detect when well inside, not at edge
 			)
 
-			if at_container_entrance and not character.is_in_container:
+			# CRITICAL: Only trigger if player is in world space (not in vehicle or container)
+			# When player is inside docked ship, they stay in vehicle interior until they walk out
+			if at_container_entrance and not character.is_in_container and not character.is_in_vehicle:
 				# Adjust camera for 180° container rotation
 				if is_instance_valid(dual_camera):
 					dual_camera.base_rotation.y += PI
@@ -672,9 +688,19 @@ func _check_transitions() -> void:
 				var local_velocity = container_transform.basis.inverse() * world_velocity
 
 				# Convert from container local coordinates to proxy coordinates
-				# Container exterior floor is at y=-20, proxy floor is at y=-20
-				# No Y offset needed - they match!
-				var proxy_pos = local_pos
+				# Container exterior floor: at y=-21 in container local space
+				# Station proxy floor: at y=50 in proxy_interior_space (STATION_PROXY_Y_OFFSET)
+				# Need to convert: height above container floor → height above proxy floor
+				var container_floor_y = -21.0  # Container exterior floor
+				var proxy_floor_y = VehicleContainer.STATION_PROXY_Y_OFFSET  # 50.0
+				var height_above_container_floor = local_pos.y - container_floor_y
+				var proxy_y = proxy_floor_y + height_above_container_floor
+				var proxy_pos = Vector3(local_pos.x, proxy_y, local_pos.z)
+
+				print("[TRANSITION] Player entering station from world")
+				print("  Container local pos: ", local_pos)
+				print("  Height above container floor (Y=-21): ", height_above_container_floor)
+				print("  Proxy pos: ", proxy_pos)
 
 				# Seamlessly enter - use transformed position
 				character.enter_container()
@@ -683,28 +709,22 @@ func _check_transitions() -> void:
 
 	# Check vehicle docking - use local space coordinates like player detection
 	if is_instance_valid(vehicle) and vehicle.exterior_body and is_instance_valid(vehicle_container) and vehicle_container.exterior_body:
-		var local_pos: Vector3
+		# ALWAYS use exterior_body position transformed to container local space
+		# This avoids issues with dock_proxy_body being reset when undocking
+		var vehicle_world_pos = vehicle.exterior_body.global_position
+		var container_transform = vehicle_container.exterior_body.global_transform
+		var relative_pos = vehicle_world_pos - container_transform.origin
+		var local_pos = container_transform.basis.inverse() * relative_pos
 
-		# When docked, read position directly from dock proxy body (already in container local space)
-		# When not docked, transform world position to container local space
-		if vehicle.is_docked and vehicle.dock_proxy_body.is_valid():
-			# Get position directly from dock proxy body (already in container local space)
-			var dock_transform: Transform3D = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
-			local_pos = dock_transform.origin
-		else:
-			# Transform world position to container local space
-			var vehicle_world_pos = vehicle.exterior_body.global_position
-			var container_transform = vehicle_container.exterior_body.global_transform
-			var relative_pos = vehicle_world_pos - container_transform.origin
-			local_pos = container_transform.basis.inverse() * relative_pos
-
-		# Docking zone: centered at (0, 0, 0), with generous bounds
+		# Docking zone: ship must be well inside before docking triggers
 		# Container is 5x ship: 90 wide (±45), 45 tall (±22.5), 150 long (±75)
-		# Opening is at z=+75, so dock zone is near center with some depth
+		# Dock floor at Y=-21, ship half-height 1.5, so ship center at ~-19.5 when on floor
+		# Opening is at z=+75, pull back detection similar to player entrance
+		# Ship length is 30 units, so requiring z < 55 ensures ship is mostly inside
 		var vehicle_in_dock_zone = (
 			abs(local_pos.x) < 30.0 and  # Narrower than container (±45)
-			abs(local_pos.y) < 15.0 and  # Centered vertically
-			local_pos.z > -60.0 and local_pos.z < 60.0  # Deep inside container
+			local_pos.y > -22.5 and local_pos.y < 22.5 and  # Tall enough for ship on floor (full container height)
+			local_pos.z > -60.0 and local_pos.z < 55.0  # Well inside container, not at entrance edge
 		)
 
 		if vehicle_in_dock_zone and not vehicle.is_docked:

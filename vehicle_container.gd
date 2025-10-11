@@ -99,20 +99,8 @@ func _create_container_exterior() -> void:
 	back_collision.position = Vector3(0, 0, -5 * size_scale)
 	exterior_body.add_child(back_collision)
 
-	# Front wall - OPENING (no mesh, this is the entrance - same as ship)
-	# Top part of front wall (above opening)
-	var front_top := MeshInstance3D.new()
-	front_top.mesh = BoxMesh.new()
-	front_top.mesh.size = Vector3(6 * size_scale, 1.0 * size_scale, 0.2)
-	front_top.material_override = material
-	front_top.position = Vector3(0, 2.5 * size_scale, 5 * size_scale)
-	exterior_body.add_child(front_top)
-
-	var front_top_collision := CollisionShape3D.new()
-	front_top_collision.shape = BoxShape3D.new()
-	front_top_collision.shape.size = Vector3(6 * size_scale, 1.0 * size_scale, 0.2)
-	front_top_collision.position = Vector3(0, 2.5 * size_scale, 5 * size_scale)
-	exterior_body.add_child(front_top_collision)
+	# Front wall - OPENING (completely open entrance, no obstruction)
+	# No front wall mesh or collision - fully open for entry/exit
 
 	# Ceiling (same proportions as ship)
 	var ceiling := MeshInstance3D.new()

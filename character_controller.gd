@@ -101,11 +101,12 @@ func _create_proxy_body() -> void:
 	PhysicsServer3D.body_set_param(proxy_body, PhysicsServer3D.BODY_PARAM_ANGULAR_DAMP, 1.0)
 
 func _physics_process(delta: float) -> void:
-	# Clear transition lock after one physics frame
+	_handle_movement(delta)
+
+	# Clear transition lock AFTER movement is processed
+	# This ensures movement is blocked for the full physics frame after position change
 	if transition_lock:
 		transition_lock = false
-
-	_handle_movement(delta)
 
 func _process(_delta: float) -> void:
 	# Update visual every frame for smooth rendering (not just physics frames)
@@ -169,8 +170,21 @@ func _update_character_visual_position() -> void:
 						var container_transform = container.exterior_body.global_transform
 						var container_basis = container_transform.basis
 
-						# Transform proxy position to world space
-						var world_pos = container_transform.origin + container_basis * proxy_pos
+						# CRITICAL: Convert from proxy space to container local space
+						# Proxy floor at Y=50, Container floor at Y=-21
+						# Offset = -21 - 50 = -71
+						var proxy_floor_y = 50.0  # VehicleContainer.STATION_PROXY_Y_OFFSET
+						var container_floor_y = -21.0  # Container exterior floor
+						var y_offset = container_floor_y - proxy_floor_y  # -71
+
+						var local_pos = Vector3(
+							proxy_pos.x,
+							proxy_pos.y + y_offset,
+							proxy_pos.z
+						)
+
+						# Transform container local position to world space
+						var world_pos = container_transform.origin + container_basis * local_pos
 						character_visual.global_position = world_pos
 						character_visual.global_transform.basis = container_basis
 					break

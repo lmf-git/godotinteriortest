@@ -23,6 +23,8 @@ var dock_interior_viewport: SubViewport
 # Display
 var external_rect: TextureRect
 var dock_interior_rect: TextureRect
+var external_panel: Panel  # Store reference to show/hide
+var dock_panel: Panel  # Store reference to show/hide
 
 var mouse_sensitivity: float = 0.002
 var base_rotation: Vector3 = Vector3.ZERO
@@ -336,7 +338,7 @@ func _setup_display() -> void:
 	external_style.border_width_top = 3
 	external_style.border_width_bottom = 3
 
-	var external_panel = Panel.new()
+	external_panel = Panel.new()
 	external_panel.name = "ExternalPIPPanel"
 	external_panel.add_theme_stylebox_override("panel", external_style)
 	canvas_layer.add_child(external_panel)
@@ -356,7 +358,7 @@ func _setup_display() -> void:
 	dock_style.border_width_top = 3
 	dock_style.border_width_bottom = 3
 
-	var dock_panel = Panel.new()
+	dock_panel = Panel.new()
 	dock_panel.name = "DockInteriorPIPPanel"
 	dock_panel.add_theme_stylebox_override("panel", dock_style)
 	canvas_layer.add_child(dock_panel)
@@ -385,7 +387,6 @@ func _update_viewport_sizes() -> void:
 	external_rect.size = Vector2(pip_width, pip_height)
 	external_rect.position = Vector2.ZERO
 
-	var external_panel = external_rect.get_parent()
 	if external_panel:
 		external_panel.position = external_pos
 		external_panel.size = Vector2(pip_width, pip_height)
@@ -397,7 +398,6 @@ func _update_viewport_sizes() -> void:
 	dock_interior_rect.size = Vector2(pip_width, pip_height)
 	dock_interior_rect.position = Vector2.ZERO
 
-	var dock_panel = dock_interior_rect.get_parent()
 	if dock_panel:
 		dock_panel.position = dock_pos
 		dock_panel.size = Vector2(pip_width, pip_height)
@@ -425,6 +425,7 @@ func _process(_delta: float) -> void:
 	_update_external_camera()
 	_update_dock_interior_camera()
 	_update_proxy_character_visuals()
+	_update_pip_visibility()
 
 func _update_main_camera() -> void:
 	if not is_instance_valid(character):
@@ -660,14 +661,30 @@ func _update_proxy_character_visuals() -> void:
 				# Get position directly from dock proxy body (in container local space)
 				var dock_transform: Transform3D = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-				# CRITICAL: Dock proxy body is in container local space (floor at y=-21)
-				# But station visual geometry is in proxy space (floor at y=-21 in relative coordinates)
-				# Need to adjust Y position by adding Y offset between container local and station proxy
-				# Container local floor: y=-21
-				# Station proxy floor: y=50
-				# Offset = 50 - (-21) = 71
+				# With recursive nesting, dock_transform is already in container's interior space
+				# which uses the same coordinate system as the visual geometry
+				# No Y offset needed
 				var station_proxy_pos = dock_transform.origin
-				station_proxy_pos.y += 71.0  # Adjust from container local Y to station proxy Y
 
 				station_vehicle_visual.position = station_proxy_pos
 				station_vehicle_visual.transform.basis = dock_transform.basis
+
+func _update_pip_visibility() -> void:
+	# Context-aware PIP camera visibility
+	if not is_instance_valid(character):
+		return
+
+	# Show/hide external PIP (ship exterior) based on player location
+	if external_panel:
+		# Show ship exterior when player is IN the ship
+		external_panel.visible = character.is_in_vehicle
+
+	# Show/hide dock PIP (container exterior) based on player/ship location
+	if dock_panel:
+		# Show container exterior when:
+		# 1. Player is IN container, OR
+		# 2. Ship is docked in container (even if player not in container/ship)
+		var show_container = character.is_in_container
+		if not show_container and is_instance_valid(vehicle):
+			show_container = vehicle.is_docked
+		dock_panel.visible = show_container

@@ -705,15 +705,15 @@ func _check_transitions() -> void:
 			var local_pos = container_transform.basis.inverse() * relative_pos
 
 			# Container is rotated 180° like the ship, 5x ship size
-			# Container size_scale = 15.0: floor at y=-21, entrance at z=+75
-			# Opening dimensions: X: ±45, Y: -21 to +21
-			# Detect entrance ONLY when player is actually on the floor, not at the edge
-			# Container proxy floor extends from z=-75 to z=+75 in proxy space
-			# Pull back detection to z=70 so player has stepped onto floor before transition
+			# Container size_scale = 15.0: floor at y=-21.0, entrance at z=+75
+			# Opening dimensions: X: ±45, Y: -21 to +21 (height 42 units)
+			# Ship Y range: abs(y) < 4.5 (±4.5 from center, 9 units total)
+			# Container Y range: ±22.5 from center (45 units total, proportional to ship)
+			# Allow detection from ground level (y≈-22) to ceiling
 			var at_container_entrance = (
 				abs(local_pos.x) < 45.0 and
-				local_pos.y > -23.0 and local_pos.y < 23.0 and
-				local_pos.z > 65.0 and local_pos.z < 70.0  # Only detect when well inside, not at edge
+				local_pos.y > -23.0 and local_pos.y < 23.0 and  # Full opening height
+				local_pos.z > 74.0 and local_pos.z < 75.0
 			)
 
 			# CRITICAL: Only trigger if player is in world space (not in vehicle or container)
@@ -729,11 +729,21 @@ func _check_transitions() -> void:
 
 				# With recursive nesting, local_pos is already in container's coordinate system
 				# Container's interior space uses the same coordinate system as the exterior
-				var proxy_pos = local_pos
+				# CRITICAL: Ensure player is placed AT floor level, not below it
+				# Container floor is at y=-21.0, player capsule height is 1.4, so center should be at y=-20.3
+				var size_scale = 3.0 * vehicle_container_small.size_multiplier
+				var container_floor_y = -1.4 * size_scale  # -21.0
+				var player_center_y = container_floor_y + 0.7  # Player capsule center at floor level
+
+				var proxy_pos = Vector3(
+					local_pos.x,
+					max(local_pos.y, player_center_y),  # Don't spawn below floor
+					local_pos.z
+				)
 
 				print("[TRANSITION] Player entering container from world")
 				print("  Container local pos: ", local_pos)
-				print("  Proxy pos: ", proxy_pos)
+				print("  Proxy pos (adjusted): ", proxy_pos)
 
 				# Set proxy_body's space to container's interior space
 				PhysicsServer3D.body_set_space(character.proxy_body, vehicle_container_small.get_interior_space())

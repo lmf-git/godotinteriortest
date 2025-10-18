@@ -181,10 +181,9 @@ func _create_proxy_interior_scene(viewport: SubViewport) -> void:
 func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 	# Create visual geometry for station interior in proxy space
 	# Container is 5x ship size (size_scale = 15.0)
-	# CRITICAL: Station proxy is at Y=50 (VehicleContainer.STATION_PROXY_Y_OFFSET)
+	# With recursive nesting, container uses relative coordinates (no Y offset)
 
 	var size_scale = 15.0  # 5x the ship's 3x scale
-	var station_y_offset = VehicleContainer.STATION_PROXY_Y_OFFSET  # Y=50
 
 	# Create container for proxy visuals
 	var proxy_interior_visuals = Node3D.new()
@@ -202,44 +201,44 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 	wall_material.metallic = 0.1
 	wall_material.roughness = 0.7
 
-	# Floor - at STATION_PROXY_Y_OFFSET (Y=50)
+	# Floor - match container collider position (relative coordinates)
 	var floor_mesh := MeshInstance3D.new()
 	floor_mesh.mesh = BoxMesh.new()
 	floor_mesh.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
 	floor_mesh.material_override = floor_material
-	floor_mesh.position = Vector3(0, station_y_offset, 0)
+	floor_mesh.position = Vector3(0, -1.4 * size_scale, 0)
 	proxy_interior_visuals.add_child(floor_mesh)
 
-	# Left wall - centered at station Y offset
+	# Left wall - match container collider position
 	var left_wall := MeshInstance3D.new()
 	left_wall.mesh = BoxMesh.new()
 	left_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
 	left_wall.material_override = wall_material
-	left_wall.position = Vector3(-3.0 * size_scale, station_y_offset, 0)
+	left_wall.position = Vector3(-3.0 * size_scale, 0, 0)
 	proxy_interior_visuals.add_child(left_wall)
 
-	# Right wall - centered at station Y offset
+	# Right wall - match container collider position
 	var right_wall := MeshInstance3D.new()
 	right_wall.mesh = BoxMesh.new()
 	right_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
 	right_wall.material_override = wall_material
-	right_wall.position = Vector3(3.0 * size_scale, station_y_offset, 0)
+	right_wall.position = Vector3(3.0 * size_scale, 0, 0)
 	proxy_interior_visuals.add_child(right_wall)
 
-	# Back wall - centered at station Y offset
+	# Back wall - match container collider position
 	var back_wall := MeshInstance3D.new()
 	back_wall.mesh = BoxMesh.new()
 	back_wall.mesh.size = Vector3(3.0 * size_scale * 2, 2.5 * size_scale, 0.1)
 	back_wall.material_override = wall_material
-	back_wall.position = Vector3(0, station_y_offset, -5.0 * size_scale)
+	back_wall.position = Vector3(0, 0, -5.0 * size_scale)
 	proxy_interior_visuals.add_child(back_wall)
 
-	# Ceiling - at station Y offset + ceiling height
+	# Ceiling - match container collider position
 	var ceiling := MeshInstance3D.new()
 	ceiling.mesh = BoxMesh.new()
 	ceiling.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
 	ceiling.material_override = wall_material
-	ceiling.position = Vector3(0, station_y_offset + 2.8 * size_scale, 0)
+	ceiling.position = Vector3(0, 1.4 * size_scale, 0)
 	proxy_interior_visuals.add_child(ceiling)
 
 	# NO LIGHT - wireframe mode doesn't need lighting
@@ -468,18 +467,9 @@ func _update_container_camera() -> void:
 		var offset = -forward * third_person_distance
 		proxy_camera_pos += offset
 
-		# CRITICAL: Convert from proxy space to container local space
-		# Proxy floor at Y=50, Container floor at Y=-21
-		# Offset = -21 - 50 = -71
-		var proxy_floor_y = 50.0  # VehicleContainer.STATION_PROXY_Y_OFFSET
-		var container_floor_y = -21.0  # Container exterior floor
-		var y_offset = container_floor_y - proxy_floor_y  # -71
-
-		var local_camera_pos = Vector3(
-			proxy_camera_pos.x,
-			proxy_camera_pos.y + y_offset,
-			proxy_camera_pos.z
-		)
+		# With recursive nesting, proxy_pos is already in container's local coordinates
+		# No Y offset conversion needed
+		var local_camera_pos = proxy_camera_pos
 
 		var world_camera_pos = container_pos + container_basis * local_camera_pos
 		main_camera.global_position = world_camera_pos
@@ -490,18 +480,8 @@ func _update_container_camera() -> void:
 		# First person: camera at head height
 		var proxy_camera_pos = Vector3(proxy_pos.x, proxy_pos.y + 1.5, proxy_pos.z)
 
-		# CRITICAL: Convert from proxy space to container local space
-		# Proxy floor at Y=50, Container floor at Y=-21
-		# Offset = -21 - 50 = -71
-		var proxy_floor_y = 50.0  # VehicleContainer.STATION_PROXY_Y_OFFSET
-		var container_floor_y = -21.0  # Container exterior floor
-		var y_offset = container_floor_y - proxy_floor_y  # -71
-
-		var local_camera_pos = Vector3(
-			proxy_camera_pos.x,
-			proxy_camera_pos.y + y_offset,
-			proxy_camera_pos.z
-		)
+		# With recursive nesting, proxy_pos is already in container's local coordinates
+		var local_camera_pos = proxy_camera_pos
 
 		var world_camera_pos = container_pos + container_basis * local_camera_pos
 
@@ -583,18 +563,17 @@ func _update_dock_interior_camera() -> void:
 
 	# Camera is in the proxy interior space (stable coordinates)
 	# Position camera at back of station interior, moderate elevation to see docked ship
-	# Station proxy floor is at Y=50 (VehicleContainer.STATION_PROXY_Y_OFFSET)
+	# With recursive nesting, container uses relative coordinates (floor at y = -1.4 * size_scale)
 	var size_scale = 15.0
-	var station_y_offset = VehicleContainer.STATION_PROXY_Y_OFFSET  # Y=50
 
-	# Position camera closer and lower to see the docked ship better
-	# Ship center is roughly at Y=50 (floor level), so camera at Y=65 gives good view
-	var cam_pos = Vector3(0, station_y_offset + 15, -3.0 * size_scale)  # Closer, lower view
+	# Position camera to see the docked ship
+	# Floor is at y = -21.0, so camera at y = -6.0 gives good view
+	var cam_pos = Vector3(0, -6.0, -3.0 * size_scale)  # Closer, lower view
 
 	dock_interior_camera.position = cam_pos
 
 	# Look at docking area center (slightly above floor to center on ship)
-	var look_target = Vector3(0, station_y_offset + 5, 0)  # Center of dock area
+	var look_target = Vector3(0, -16.0, 0)  # Center of dock area
 	dock_interior_camera.look_at(look_target, Vector3.UP)
 
 func get_forward_direction() -> Vector3:
@@ -682,7 +661,7 @@ func _update_proxy_character_visuals() -> void:
 				var dock_transform: Transform3D = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
 				# CRITICAL: Dock proxy body is in container local space (floor at y=-21)
-				# But station visual geometry is in proxy space (floor at y=50 from STATION_PROXY_Y_OFFSET)
+				# But station visual geometry is in proxy space (floor at y=-21 in relative coordinates)
 				# Need to adjust Y position by adding Y offset between container local and station proxy
 				# Container local floor: y=-21
 				# Station proxy floor: y=50

@@ -8,16 +8,20 @@ extends Node3D
 
 # Vehicle components
 var exterior_body: RigidBody3D  # Vehicle exterior in world or dock proxy
-var dock_proxy_body: RID  # Vehicle body when docked (in dock proxy space)
+var dock_proxy_body: RID  # Vehicle body when docked (in parent container's interior space)
 var interior_visuals: Node3D  # Interior geometry (visual only)
-var interior_proxy_colliders: Array[RID]  # Static colliders in proxy space
+var interior_proxy_colliders: Array[RID]  # KINEMATIC colliders in THIS vehicle's interior space
 var transition_zone: Area3D  # Zone where player can enter vehicle
+
+# Recursive physics space - each vehicle has its own interior space
+var vehicle_interior_space: RID  # This vehicle's OWN interior physics space (for player/objects inside)
 
 var is_docked: bool = false
 var magnetism_enabled: bool = false
 
 func _ready() -> void:
 	_create_vehicle_exterior()
+	_create_vehicle_physics_space()  # Create vehicle's own interior physics space
 	_create_proxy_interior_colliders()
 	_create_proxy_interior_visuals()  # Add visual geometry to proxy space
 	_create_vehicle_dock_proxy()
@@ -132,6 +136,29 @@ func _create_vehicle_exterior() -> void:
 	exterior_body.linear_damp = 2.0  # Add damping so it doesn't bounce
 	exterior_body.angular_damp = 2.0
 
+func _create_vehicle_physics_space() -> void:
+	# Each vehicle has its own interior physics space for recursive nesting
+	# This allows ships inside containers, containers inside containers, etc.
+	if not physics_proxy:
+		push_warning("PhysicsProxy not assigned to Vehicle")
+		return
+
+	vehicle_interior_space = PhysicsServer3D.space_create()
+	PhysicsServer3D.space_set_active(vehicle_interior_space, true)
+
+	# Create gravity area for this vehicle's interior
+	var gravity_area = PhysicsServer3D.area_create()
+	PhysicsServer3D.area_set_space(gravity_area, vehicle_interior_space)
+	PhysicsServer3D.area_set_param(gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY, 9.8)
+	PhysicsServer3D.area_set_param(gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY_VECTOR, Vector3(0, -1, 0))
+	PhysicsServer3D.area_set_param(gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY_IS_POINT, false)
+
+	# Make the gravity area large enough to cover the vehicle interior
+	var large_box_shape = PhysicsServer3D.box_shape_create()
+	PhysicsServer3D.shape_set_data(large_box_shape, Vector3(1000, 1000, 1000))
+	PhysicsServer3D.area_add_shape(gravity_area, large_box_shape)
+	PhysicsServer3D.area_set_shape_transform(gravity_area, 0, Transform3D(Basis(), Vector3.ZERO))
+
 func _create_vehicle_interior_visuals() -> void:
 	# Vehicle interior visuals - these are KINEMATIC (visual only, no player collision)
 	# Player collides with proxy interior colliders instead
@@ -192,27 +219,26 @@ func _create_vehicle_interior_visuals() -> void:
 	# Front wall removed so player can see out the opening
 
 func _create_proxy_interior_colliders() -> void:
-	# KINEMATIC colliders in proxy world - player can collide with these
-	# These move with the dock_proxy_body when ship is docked
+	# KINEMATIC colliders in THIS vehicle's own interior physics space
+	# Player inside THIS vehicle collides with these
 	# SCALED 3x to match exterior
-	if not physics_proxy:
-		push_warning("PhysicsProxy not assigned to Vehicle")
+	if not vehicle_interior_space.is_valid():
+		push_warning("Vehicle interior space not created")
 		return
 
-	var proxy_space = physics_proxy.get_proxy_interior_space()
 	interior_proxy_colliders = []
 
 	var size_scale = 3.0
 
-	# Floor collider - Match exterior width exactly
+	# Floor collider - Relative coordinates in vehicle's own space
 	# Width: 3.0 * size_scale (9 units) matches exterior walls at ±9
 	# Length: 5.0 * size_scale (15 units) matches exterior 15 units
 	var floor_shape := PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
 
 	var floor_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_KINEMATIC)  # Changed from STATIC
-	PhysicsServer3D.body_set_space(floor_body, proxy_space)
+	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_space(floor_body, vehicle_interior_space)  # Vehicle's own space!
 	PhysicsServer3D.body_add_shape(floor_body, floor_shape)
 	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.4 * size_scale, 0)))
 	interior_proxy_colliders.append(floor_body)
@@ -222,8 +248,8 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.05, 1.25 * size_scale, 5.0 * size_scale))
 
 	var left_wall_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(left_wall_body, PhysicsServer3D.BODY_MODE_KINEMATIC)  # Changed from STATIC
-	PhysicsServer3D.body_set_space(left_wall_body, proxy_space)
+	PhysicsServer3D.body_set_mode(left_wall_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_space(left_wall_body, vehicle_interior_space)  # Vehicle's own space!
 	PhysicsServer3D.body_add_shape(left_wall_body, left_wall_shape)
 	PhysicsServer3D.body_set_state(left_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(-3.0 * size_scale, 0, 0)))
 	interior_proxy_colliders.append(left_wall_body)
@@ -233,8 +259,8 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.05, 1.25 * size_scale, 5.0 * size_scale))
 
 	var right_wall_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(right_wall_body, PhysicsServer3D.BODY_MODE_KINEMATIC)  # Changed from STATIC
-	PhysicsServer3D.body_set_space(right_wall_body, proxy_space)
+	PhysicsServer3D.body_set_mode(right_wall_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_space(right_wall_body, vehicle_interior_space)  # Vehicle's own space!
 	PhysicsServer3D.body_add_shape(right_wall_body, right_wall_shape)
 	PhysicsServer3D.body_set_state(right_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(3.0 * size_scale, 0, 0)))
 	interior_proxy_colliders.append(right_wall_body)
@@ -244,8 +270,8 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(3.0 * size_scale, 1.25 * size_scale, 0.05))
 
 	var back_wall_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(back_wall_body, PhysicsServer3D.BODY_MODE_KINEMATIC)  # Changed from STATIC
-	PhysicsServer3D.body_set_space(back_wall_body, proxy_space)
+	PhysicsServer3D.body_set_mode(back_wall_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_space(back_wall_body, vehicle_interior_space)  # Vehicle's own space!
 	PhysicsServer3D.body_add_shape(back_wall_body, back_wall_shape)
 	PhysicsServer3D.body_set_state(back_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 0, -5.0 * size_scale)))
 	interior_proxy_colliders.append(back_wall_body)
@@ -255,8 +281,8 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
 
 	var ceiling_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(ceiling_body, PhysicsServer3D.BODY_MODE_KINEMATIC)  # Changed from STATIC
-	PhysicsServer3D.body_set_space(ceiling_body, proxy_space)
+	PhysicsServer3D.body_set_mode(ceiling_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_space(ceiling_body, vehicle_interior_space)  # Vehicle's own space!
 	PhysicsServer3D.body_add_shape(ceiling_body, ceiling_shape)
 	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.4 * size_scale, 0)))
 	interior_proxy_colliders.append(ceiling_body)
@@ -307,19 +333,15 @@ func _create_proxy_interior_visuals() -> void:
 	pass  # Implemented in dual_camera_view
 
 func _create_vehicle_dock_proxy() -> void:
-	# Create vehicle physics body in proxy interior space (for when vehicle is docked)
-	# The docked ship shares the same physics space as the player/station interior
-	if not physics_proxy:
-		return
-
-	var proxy_space = physics_proxy.get_proxy_interior_space()
-
+	# Create vehicle physics body for when docked in a container
+	# Space will be set to parent container's interior space during docking
+	# (not created in shared space - each container has its own space)
 	var vehicle_shape := PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(vehicle_shape, Vector3(3, 1.5, 5))
 
 	dock_proxy_body = PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(dock_proxy_body, PhysicsServer3D.BODY_MODE_RIGID)
-	PhysicsServer3D.body_set_space(dock_proxy_body, proxy_space)
+	# NOTE: Space not set here - will be set to parent container's interior space when docking
 	PhysicsServer3D.body_add_shape(dock_proxy_body, vehicle_shape)
 	PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3.ZERO))
 
@@ -338,6 +360,50 @@ func _create_transition_zone() -> void:
 	# Zone is just used for logic, no visible collision shape needed
 	# Transition detection is done via position checks in game_manager
 
+func _physics_process(_delta: float) -> void:
+	# CRITICAL: KINEMATIC colliders in custom physics spaces MUST be updated every frame
+	# Without updates, they won't collide with RIGID bodies properly
+	if is_docked and dock_proxy_body.is_valid():
+		var proxy_transform: Transform3D = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+		_update_interior_colliders_position(proxy_transform)
+	else:
+		# Ship not docked - refresh colliders at fixed positions (centered at origin)
+		_refresh_interior_colliders_at_origin()
+
+func _is_player_in_ship() -> bool:
+	# Check if player is in this ship's interior
+	var game_manager = get_parent()
+	if not game_manager:
+		return false
+
+	for child in game_manager.get_children():
+		if child is CharacterController:
+			return child.is_in_vehicle
+
+	return false
+
+func _refresh_interior_colliders_at_origin() -> void:
+	# Keep KINEMATIC colliders active when ship is free-flying
+	# Colliders are stationary at origin in proxy space
+	if interior_proxy_colliders.size() == 0:
+		return
+
+	var size_scale = 3.0
+
+	var collider_positions = [
+		Vector3(0, -1.4 * size_scale, 0),  # Floor
+		Vector3(-3.0 * size_scale, 0, 0),   # Left wall
+		Vector3(3.0 * size_scale, 0, 0),    # Right wall
+		Vector3(0, 0, -5.0 * size_scale),   # Back wall
+		Vector3(0, 1.4 * size_scale, 0)     # Ceiling
+	]
+
+	for i in range(min(interior_proxy_colliders.size(), collider_positions.size())):
+		var collider = interior_proxy_colliders[i]
+		if collider.is_valid():
+			var collider_transform = Transform3D(Basis(), collider_positions[i])
+			PhysicsServer3D.body_set_state(collider, PhysicsServer3D.BODY_STATE_TRANSFORM, collider_transform)
+
 func _process(_delta: float) -> void:
 	# Update exterior body visual based on docked state
 	if is_docked and dock_proxy_body.is_valid() and exterior_body:
@@ -349,21 +415,17 @@ func _process(_delta: float) -> void:
 		if dock_vel.length() > 0.001:  # Only log if moving
 			print("[DOCK MONITOR] Ship moving! Vel: ", dock_vel, " | Pos Y: ", proxy_transform.origin.y)
 
-		# CRITICAL: Update interior collider positions to match dock_proxy_body
-		# The interior colliders need to move with the ship when docked
-		_update_interior_colliders_position(proxy_transform)
-
-		# Get parent container (we need to find the container in the scene)
-		var container = get_parent().get_node_or_null("VehicleContainer")
+		# Get parent container (works with any container due to recursive nesting)
+		var container = _get_docked_container()
 		if container and container.exterior_body:
 			var container_transform = container.exterior_body.global_transform
 
-			# Convert from proxy space to container local space
-			# Proxy Y=50 is station floor, Container local Y=-21 is station floor
-			# So: container_local_y = proxy_y - 50 + (-21) = proxy_y - 71
-			var station_floor_proxy = VehicleContainer.STATION_PROXY_Y_OFFSET  # 50
-			var station_floor_local = -21.0  # Container exterior floor at y=-21 in local space
-			var y_offset = station_floor_local - station_floor_proxy  # -71
+			# Convert from container's interior space to world space
+			# With recursive nesting, proxy_transform is already in container's local coordinates
+			var size_scale = 3.0 * container.size_multiplier
+			var container_floor_local = -1.4 * size_scale  # Container exterior floor
+			# Ship proxy is at origin in proxy space, so offset = container floor
+			var y_offset = container_floor_local
 
 			var local_pos = Vector3(
 				proxy_transform.origin.x,
@@ -386,7 +448,7 @@ func apply_thrust(direction: Vector3, force: float) -> void:
 		# Apply thrust in proxy interior space
 		# Direction comes in world space from exterior_body.basis
 		# Need to transform to proxy space where dock_proxy_body lives
-		var container = get_parent().get_node_or_null("VehicleContainer")
+		var container = _get_docked_container()
 		if container and container.exterior_body:
 			var container_transform = container.exterior_body.global_transform
 			# Transform world direction to container local (which matches proxy space orientation)
@@ -414,7 +476,7 @@ func apply_rotation(axis: Vector3, torque: float) -> void:
 	if is_docked and dock_proxy_body.is_valid():
 		# Apply rotation in proxy interior space
 		# Axis comes in world space, need to transform to container local space
-		var container = get_parent().get_node_or_null("VehicleContainer")
+		var container = _get_docked_container()
 		if container and container.exterior_body:
 			var container_transform = container.exterior_body.global_transform
 			var local_axis = container_transform.basis.inverse() * axis
@@ -427,35 +489,45 @@ func apply_rotation(axis: Vector3, torque: float) -> void:
 		exterior_body.apply_torque(axis * torque)
 
 func toggle_magnetism() -> void:
-	if is_docked and physics_proxy:
+	# Toggle artificial gravity in THIS vehicle's interior space
+	if vehicle_interior_space.is_valid():
 		magnetism_enabled = !magnetism_enabled
-		physics_proxy.set_proxy_interior_gravity(magnetism_enabled)
+		# Note: In the new architecture, each vehicle has its own gravity area
+		# which was created in _create_vehicle_physics_space()
+		# We would need to store the gravity_area RID to toggle it
+		# For now, this is a placeholder for future implementation
 
-func set_docked(docked: bool) -> void:
+func set_docked(docked: bool, parent_container: VehicleContainer = null) -> void:
 	if docked and not is_docked:
-		# Ship is entering dock - transfer position from world to proxy interior space
+		# Ship is entering dock - transfer position from world to container's interior space
 		if exterior_body and dock_proxy_body.is_valid():
 			# Get container to transform world position to container local space
-			var container = get_parent().get_node_or_null("VehicleContainer")
+			# If not provided, try to find VehicleContainerSmall (backwards compatibility)
+			var container = parent_container
+			if not container:
+				container = get_parent().get_node_or_null("VehicleContainerSmall")
 			if container and container.exterior_body:
+				# CRITICAL: Set dock_proxy_body's space to parent container's interior space
+				var container_interior_space = container.get_interior_space()
+				if not container_interior_space.is_valid():
+					push_error("Container interior space not valid!")
+					return
+				PhysicsServer3D.body_set_space(dock_proxy_body, container_interior_space)
+
 				var container_transform = container.exterior_body.global_transform
 				var world_transform = exterior_body.global_transform
 
-				# Transform world position to container local space
+				# Transform world position to container local space (relative coordinates)
 				var relative_transform = container_transform.inverse() * world_transform
 
-				# DEBUG: Log world velocity before docking
-				var world_vel = exterior_body.linear_velocity
-				print("[DOCK DEBUG] World velocity before docking: ", world_vel)
-
-				# Place ship in proxy interior space at station floor level (Y=50)
-				# CRITICAL: Ship's interior floor is at dock_proxy_body.Y + (-1.4 * size_scale)
-				# We want interior floor at station floor level (Y=50), so:
-				# dock_proxy_body.Y + (-4.2) = 50
-				# dock_proxy_body.Y = 50 + 4.2 = 54.2
-				var station_floor_y = VehicleContainer.STATION_PROXY_Y_OFFSET  # 50
-				var ship_floor_offset = -1.4 * 3.0  # -4.2 (interior floor relative to center)
-				var ship_center_y = station_floor_y - ship_floor_offset + 0.1  # 54.3 (0.1 units above floor)
+				# Place ship in container's interior space at floor level
+				# Container floor is at y = -1.4 * container_size_scale
+				# Ship floor is at y = ship_center + (-1.4 * ship_size_scale)
+				# We want ship floor slightly above container floor
+				var container_size = 3.0 * container.size_multiplier
+				var container_floor_y = -1.4 * container_size
+				var ship_floor_offset = -1.4 * 3.0  # -4.2 (ship interior floor relative to ship center)
+				var ship_center_y = container_floor_y - ship_floor_offset + 0.1  # 0.1 units above container floor
 				var proxy_pos = Vector3(
 					relative_transform.origin.x,
 					ship_center_y,
@@ -463,36 +535,32 @@ func set_docked(docked: bool) -> void:
 				)
 				var proxy_transform = Transform3D(relative_transform.basis, proxy_pos)
 
-				# Set dock proxy body to this proxy position
+				# Set dock proxy body to this position in container's interior space
 				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, proxy_transform)
+				print("[DOCK DEBUG] Ship docked in container's interior space: ", container_interior_space)
 				print("[DOCK DEBUG] Dock transform set to: ", proxy_transform.origin)
-				print("[DOCK DEBUG] Ship center Y: ", ship_center_y, " | Interior floor should be at Y: ", ship_center_y + ship_floor_offset)
 
 				# Zero out velocities so ship doesn't bounce
 				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, Vector3.ZERO)
 				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, Vector3.ZERO)
-
-				# Ship is in RIGID mode and will fall to floor with gravity
-				var verify_vel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
-				var body_mode = PhysicsServer3D.body_get_mode(dock_proxy_body)
-				var space_rid = PhysicsServer3D.body_get_space(dock_proxy_body)
-				print("[DOCK DEBUG] Immediately after - Velocity: ", verify_vel, " | Position Y: ", proxy_transform.origin.y, " | Mode: ", body_mode)
-				print("[DOCK DEBUG] Space RID: ", space_rid, " | Expected proxy_interior_space: ", physics_proxy.get_proxy_interior_space())
 	elif not docked and is_docked:
-		# Ship is leaving dock - transfer position from dock proxy to world
+		# Ship is leaving dock - transfer position from container's interior space to world
 		if exterior_body and dock_proxy_body.is_valid():
-			var container = get_parent().get_node_or_null("VehicleContainer")
+			# Get container (if not provided, try to find VehicleContainerSmall)
+			var container = parent_container
+			if not container:
+				container = get_parent().get_node_or_null("VehicleContainerSmall")
 			if container and container.exterior_body:
 				var container_transform = container.exterior_body.global_transform
 				var dock_transform = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-				# Transform dock proxy position to world space
+				# Transform dock proxy position (in container's interior space) to world space
 				var world_transform = container_transform * dock_transform
 
 				# Set exterior body to this world position
 				exterior_body.global_transform = world_transform
 
-				# Copy velocity
+				# Copy velocity from container's interior space to world space
 				var local_velocity = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
 				var world_velocity = container_transform.basis * local_velocity
 				exterior_body.linear_velocity = world_velocity
@@ -502,10 +570,35 @@ func set_docked(docked: bool) -> void:
 				var world_angvel = container_transform.basis * local_angvel
 				exterior_body.angular_velocity = world_angvel
 
-				# Switch back to RIGID mode - ship is now free-flying
-				PhysicsServer3D.body_set_mode(dock_proxy_body, PhysicsServer3D.BODY_MODE_RIGID)
+				# Remove dock_proxy_body from container's interior space
+				# (it will be added to a new space when docking again)
+				PhysicsServer3D.body_set_space(dock_proxy_body, RID())
 
 	is_docked = docked
+
+func get_interior_space() -> RID:
+	# Return this vehicle's interior physics space (for recursive nesting)
+	return vehicle_interior_space
+
+func _get_docked_container() -> VehicleContainer:
+	# Find the container that this ship is currently docked in
+	# Returns null if not docked or container not found
+	if not is_docked or not dock_proxy_body.is_valid():
+		return null
+
+	var game_manager = get_parent()
+	if not game_manager:
+		return null
+
+	# Find the container whose interior space contains our dock_proxy_body
+	var dock_space = PhysicsServer3D.body_get_space(dock_proxy_body)
+	for child in game_manager.get_children():
+		if child is VehicleContainer:
+			var test_container = child as VehicleContainer
+			if dock_space == test_container.get_interior_space():
+				return test_container
+
+	return null
 
 func _exit_tree() -> void:
 	# Clean up proxy colliders
@@ -515,3 +608,7 @@ func _exit_tree() -> void:
 
 	if dock_proxy_body.is_valid():
 		PhysicsServer3D.free_rid(dock_proxy_body)
+
+	# Clean up vehicle's interior physics space
+	if vehicle_interior_space.is_valid():
+		PhysicsServer3D.free_rid(vehicle_interior_space)

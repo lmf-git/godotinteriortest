@@ -6,6 +6,7 @@ extends Node3D
 
 @export var physics_proxy: PhysicsProxy
 @export var move_speed: float = 5.0
+@export var run_speed: float = 10.0
 @export var jump_force: float = 8.0
 
 # Character bodies
@@ -22,6 +23,7 @@ var transition_lock: bool = false  # Prevents movement during transition frame
 # Input
 var input_direction: Vector3 = Vector3.ZERO
 var jump_pressed: bool = false
+var is_running: bool = false
 
 func _ready() -> void:
 	_create_character_visual()
@@ -76,18 +78,15 @@ func _create_world_body() -> void:
 	PhysicsServer3D.body_set_axis_lock(world_body, PhysicsServer3D.BODY_AXIS_ANGULAR_Z, true)
 
 func _create_proxy_body() -> void:
-	# Character body in proxy interior (for when inside vehicles)
-	if not physics_proxy:
-		return
-
-	var proxy_space = physics_proxy.get_proxy_interior_space()
-
+	# Character body for proxy interiors (vehicles/containers)
+	# Space will be dynamically set based on which vehicle/container player enters
+	# Each vehicle/container has its own interior physics space for recursive nesting
 	var capsule_shape := PhysicsServer3D.capsule_shape_create()
 	PhysicsServer3D.shape_set_data(capsule_shape, {"radius": 0.3, "height": 1.4})
 
 	proxy_body = PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(proxy_body, PhysicsServer3D.BODY_MODE_RIGID)
-	PhysicsServer3D.body_set_space(proxy_body, proxy_space)
+	# NOTE: Space not set here - will be dynamically set when entering vehicle/container
 	PhysicsServer3D.body_add_shape(proxy_body, capsule_shape)
 	PhysicsServer3D.body_set_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3.ZERO))
 
@@ -131,7 +130,8 @@ func _handle_movement(delta: float) -> void:
 
 	# Apply horizontal movement
 	if input_direction.length() > 0:
-		var move_vec = input_direction.normalized() * move_speed
+		var current_speed = run_speed if is_running else move_speed
+		var move_vec = input_direction.normalized() * current_speed
 		velocity.x = move_vec.x
 		velocity.z = move_vec.z
 	else:
@@ -157,6 +157,7 @@ func _update_character_visual_position() -> void:
 	# Update character visual based on current physics space
 	if is_in_container and proxy_body.is_valid():
 		# Character in container interior - position relative to container
+		# With recursive nesting, proxy_pos is already in container's local coordinate system
 		var proxy_transform: Transform3D = PhysicsServer3D.body_get_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		var proxy_pos = proxy_transform.origin
 
@@ -170,21 +171,9 @@ func _update_character_visual_position() -> void:
 						var container_transform = container.exterior_body.global_transform
 						var container_basis = container_transform.basis
 
-						# CRITICAL: Convert from proxy space to container local space
-						# Proxy floor at Y=50, Container floor at Y=-21
-						# Offset = -21 - 50 = -71
-						var proxy_floor_y = 50.0  # VehicleContainer.STATION_PROXY_Y_OFFSET
-						var container_floor_y = -21.0  # Container exterior floor
-						var y_offset = container_floor_y - proxy_floor_y  # -71
-
-						var local_pos = Vector3(
-							proxy_pos.x,
-							proxy_pos.y + y_offset,
-							proxy_pos.z
-						)
-
-						# Transform container local position to world space
-						var world_pos = container_transform.origin + container_basis * local_pos
+						# Transform proxy position (in container's interior space) to world space
+						# No Y offset needed - coordinates are already relative to container
+						var world_pos = container_transform.origin + container_basis * proxy_pos
 						character_visual.global_position = world_pos
 						character_visual.global_transform.basis = container_basis
 					break
@@ -247,6 +236,9 @@ func set_input_direction(direction: Vector3) -> void:
 func set_jump(pressed: bool) -> void:
 	jump_pressed = pressed
 
+func set_running(running: bool) -> void:
+	is_running = running
+
 func enter_vehicle() -> void:
 	is_in_vehicle = true
 	current_space = "vehicle_interior"
@@ -262,6 +254,7 @@ func enter_container() -> void:
 
 func exit_container() -> void:
 	is_in_container = false
+	current_space = "space"
 
 func get_proxy_position() -> Vector3:
 	if proxy_body.is_valid():

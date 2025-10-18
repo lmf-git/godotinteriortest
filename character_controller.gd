@@ -77,6 +77,11 @@ func _create_world_body() -> void:
 	PhysicsServer3D.body_set_axis_lock(world_body, PhysicsServer3D.BODY_AXIS_ANGULAR_Y, true)
 	PhysicsServer3D.body_set_axis_lock(world_body, PhysicsServer3D.BODY_AXIS_ANGULAR_Z, true)
 
+	# Enable collision settings
+	PhysicsServer3D.body_set_collision_layer(world_body, 1)
+	PhysicsServer3D.body_set_collision_mask(world_body, 1)
+	PhysicsServer3D.body_set_state(world_body, PhysicsServer3D.BODY_STATE_CAN_SLEEP, false)
+
 func _create_proxy_body() -> void:
 	# Character body for proxy interiors (vehicles/containers)
 	# Space will be dynamically set based on which vehicle/container player enters
@@ -94,6 +99,11 @@ func _create_proxy_body() -> void:
 	PhysicsServer3D.body_set_axis_lock(proxy_body, PhysicsServer3D.BODY_AXIS_ANGULAR_X, true)
 	PhysicsServer3D.body_set_axis_lock(proxy_body, PhysicsServer3D.BODY_AXIS_ANGULAR_Y, true)
 	PhysicsServer3D.body_set_axis_lock(proxy_body, PhysicsServer3D.BODY_AXIS_ANGULAR_Z, true)
+
+	# Enable collision settings
+	PhysicsServer3D.body_set_collision_layer(proxy_body, 1)
+	PhysicsServer3D.body_set_collision_mask(proxy_body, 1)
+	PhysicsServer3D.body_set_state(proxy_body, PhysicsServer3D.BODY_STATE_CAN_SLEEP, false)
 
 	# Add damping for stability in proxy space
 	PhysicsServer3D.body_set_param(proxy_body, PhysicsServer3D.BODY_PARAM_LINEAR_DAMP, 0.1)

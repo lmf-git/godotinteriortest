@@ -52,9 +52,9 @@ func _create_container_physics_space() -> void:
 	PhysicsServer3D.area_set_shape_transform(gravity_area, 0, Transform3D(Basis(), Vector3.ZERO))
 
 func _physics_process(_delta: float) -> void:
-	# CRITICAL: KINEMATIC colliders in custom physics spaces MUST be updated every frame
-	# Without updates, they won't collide with RIGID bodies properly
-	_refresh_interior_colliders()
+	# Interior colliders are STATIC and don't need updates
+	# They stay at fixed positions in the container's interior space
+	pass
 
 func _is_player_in_container() -> bool:
 	# Check if player is in this container's interior
@@ -190,7 +190,7 @@ func _create_container_exterior() -> void:
 	exterior_body.add_child(ceiling_collision)
 
 func _create_container_proxy_interior() -> void:
-	# Create KINEMATIC colliders in THIS container's own physics space
+	# Create STATIC colliders in THIS container's own physics space
 	# These colliders are for objects/players inside this container
 	if not container_interior_space.is_valid():
 		push_warning("Container interior space not created")
@@ -205,11 +205,14 @@ func _create_container_proxy_interior() -> void:
 	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
 
 	var floor_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(floor_body, container_interior_space)  # Use container's own space
 	PhysicsServer3D.body_add_shape(floor_body, floor_shape)
 	# Floor at Y=0 in container's own coordinate system (not offset like before)
 	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.4 * size_scale, 0)))
+	# Enable collision with docked ships and players
+	PhysicsServer3D.body_set_collision_layer(floor_body, 1)
+	PhysicsServer3D.body_set_collision_mask(floor_body, 1)
 	interior_proxy_colliders.append(floor_body)
 
 	# Left wall - at station proxy Y offset
@@ -217,10 +220,13 @@ func _create_container_proxy_interior() -> void:
 	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.05, 1.25 * size_scale, 5.0 * size_scale))
 
 	var left_wall_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(left_wall_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_mode(left_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(left_wall_body, container_interior_space)
 	PhysicsServer3D.body_add_shape(left_wall_body, left_wall_shape)
 	PhysicsServer3D.body_set_state(left_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(-3.0 * size_scale, 0, 0)))
+	# Enable collision with docked ships and players
+	PhysicsServer3D.body_set_collision_layer(left_wall_body, 1)
+	PhysicsServer3D.body_set_collision_mask(left_wall_body, 1)
 	interior_proxy_colliders.append(left_wall_body)
 
 	# Right wall - at station proxy Y offset
@@ -228,10 +234,13 @@ func _create_container_proxy_interior() -> void:
 	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.05, 1.25 * size_scale, 5.0 * size_scale))
 
 	var right_wall_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(right_wall_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_mode(right_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(right_wall_body, container_interior_space)
 	PhysicsServer3D.body_add_shape(right_wall_body, right_wall_shape)
 	PhysicsServer3D.body_set_state(right_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(3.0 * size_scale, 0, 0)))
+	# Enable collision with docked ships and players
+	PhysicsServer3D.body_set_collision_layer(right_wall_body, 1)
+	PhysicsServer3D.body_set_collision_mask(right_wall_body, 1)
 	interior_proxy_colliders.append(right_wall_body)
 
 	# Back wall - at station proxy Y offset
@@ -239,10 +248,13 @@ func _create_container_proxy_interior() -> void:
 	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(3.0 * size_scale, 1.25 * size_scale, 0.05))
 
 	var back_wall_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(back_wall_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_mode(back_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(back_wall_body, container_interior_space)
 	PhysicsServer3D.body_add_shape(back_wall_body, back_wall_shape)
 	PhysicsServer3D.body_set_state(back_wall_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 0, -5.0 * size_scale)))
+	# Enable collision with docked ships and players
+	PhysicsServer3D.body_set_collision_layer(back_wall_body, 1)
+	PhysicsServer3D.body_set_collision_mask(back_wall_body, 1)
 	interior_proxy_colliders.append(back_wall_body)
 
 	# Ceiling - at station proxy Y offset + ceiling height
@@ -250,10 +262,13 @@ func _create_container_proxy_interior() -> void:
 	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
 
 	var ceiling_body := PhysicsServer3D.body_create()
-	PhysicsServer3D.body_set_mode(ceiling_body, PhysicsServer3D.BODY_MODE_KINEMATIC)
+	PhysicsServer3D.body_set_mode(ceiling_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(ceiling_body, container_interior_space)
 	PhysicsServer3D.body_add_shape(ceiling_body, ceiling_shape)
 	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.4 * size_scale, 0)))
+	# Enable collision with docked ships and players
+	PhysicsServer3D.body_set_collision_layer(ceiling_body, 1)
+	PhysicsServer3D.body_set_collision_mask(ceiling_body, 1)
 	interior_proxy_colliders.append(ceiling_body)
 
 	# Note: No front wall collider - this is the opening where players can enter
@@ -342,8 +357,6 @@ func set_docked(docked: bool, parent_container: VehicleContainer = null) -> void
 
 			# Set dock proxy body to this position in parent's interior space
 			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, proxy_transform)
-			print("[CONTAINER DOCK] Container docked in parent's interior space: ", parent_interior_space)
-			print("[CONTAINER DOCK] Dock transform set to: ", proxy_transform.origin)
 
 			# Zero out velocities
 			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, Vector3.ZERO)

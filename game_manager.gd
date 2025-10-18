@@ -19,6 +19,11 @@ var last_ship_station_log: Dictionary = {}
 var last_docking_log: Dictionary = {}
 const LOG_DEBOUNCE_TIME: float = 0.5  # Only log same message every 0.5 seconds
 
+# FPS tracking
+var fps_counter: float = 0.0
+var fps_update_timer: float = 0.0
+const FPS_UPDATE_INTERVAL: float = 0.25  # Update FPS display 4 times per second
+
 func _debounced_log(category: String, message: String, data: Dictionary) -> void:
 	# Only log if different data or enough time has passed
 	var current_time = Time.get_ticks_msec() / 1000.0
@@ -132,10 +137,10 @@ func _create_ground_plane() -> void:
 func _create_lighting() -> void:
 	# 3-Point Lighting Setup - BRIGHT for visibility
 
-	# 1. KEY LIGHT - Main light source (brightest, casts shadows)
+	# 1. KEY LIGHT - Main light source (casts shadows)
 	var key_light := DirectionalLight3D.new()
 	key_light.name = "KeyLight"
-	key_light.light_energy = 3.0  # Much brighter
+	key_light.light_energy = 1.0  # Moderate brightness
 	key_light.light_color = Color(1.0, 1.0, 1.0)  # Pure white
 	key_light.rotation_degrees = Vector3(-45, -30, 0)
 	key_light.shadow_enabled = true
@@ -146,7 +151,7 @@ func _create_lighting() -> void:
 	# 2. FILL LIGHT - Softens shadows from key light
 	var fill_light := DirectionalLight3D.new()
 	fill_light.name = "FillLight"
-	fill_light.light_energy = 2.0  # Much brighter
+	fill_light.light_energy = 0.5  # Soft fill
 	fill_light.light_color = Color(0.9, 0.95, 1.0)  # Slightly cool
 	fill_light.rotation_degrees = Vector3(-30, 150, 0)
 	fill_light.shadow_enabled = false
@@ -155,7 +160,7 @@ func _create_lighting() -> void:
 	# 3. RIM/BACK LIGHT - Creates separation from background
 	var rim_light := DirectionalLight3D.new()
 	rim_light.name = "RimLight"
-	rim_light.light_energy = 1.5  # Brighter
+	rim_light.light_energy = 0.4  # Subtle rim
 	rim_light.light_color = Color(1.0, 1.0, 1.0)
 	rim_light.rotation_degrees = Vector3(-20, 180, 0)
 	rim_light.shadow_enabled = false
@@ -163,14 +168,24 @@ func _create_lighting() -> void:
 
 	# AMBIENT - Overall base illumination - MUCH BRIGHTER
 	var ambient_env := Environment.new()
-	ambient_env.background_mode = Environment.BG_SKY
-	ambient_env.sky = Sky.new()
-	ambient_env.sky.sky_material = ProceduralSkyMaterial.new()
-	ambient_env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	ambient_env.ambient_light_energy = 1.5  # Much higher
-	ambient_env.tonemap_mode = Environment.TONE_MAPPER_LINEAR  # No tone mapping
+	ambient_env.background_mode = Environment.BG_COLOR
+	ambient_env.background_color = Color(0.0, 0.0, 0.0)  # Pure black space
+	ambient_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	ambient_env.ambient_light_color = Color(0.3, 0.35, 0.4)  # Subtle neutral light
+	ambient_env.ambient_light_energy = 0.3  # Gentle ambient
+	ambient_env.tonemap_mode = Environment.TONE_MAPPER_FILMIC  # Better contrast
 	ambient_env.adjustment_enabled = true
-	ambient_env.adjustment_brightness = 1.3  # Boost overall brightness
+	ambient_env.adjustment_brightness = 1.2  # Boost overall brightness
+
+	# Enable SSAO for better depth perception
+	ambient_env.ssao_enabled = true
+	ambient_env.ssao_radius = 2.0
+	ambient_env.ssao_intensity = 1.5
+
+	# Enable SSIL for bounce lighting
+	ambient_env.ssil_enabled = true
+	ambient_env.ssil_radius = 8.0
+	ambient_env.ssil_intensity = 1.0
 
 	var world_env := WorldEnvironment.new()
 	world_env.environment = ambient_env
@@ -261,6 +276,12 @@ func _process(delta: float) -> void:
 	if container_transition_cooldown > 0:
 		container_transition_cooldown -= delta
 
+	# Update FPS counter
+	fps_update_timer += delta
+	if fps_update_timer >= FPS_UPDATE_INTERVAL:
+		fps_counter = Engine.get_frames_per_second()
+		fps_update_timer = 0.0
+
 	_update_debug_ui()
 	_handle_input()
 	_check_transitions()
@@ -289,20 +310,26 @@ func _update_debug_ui() -> void:
 	if is_instance_valid(vehicle) and is_instance_valid(vehicle_container_small):
 		vehicle_docked = vehicle.is_docked
 
+	# Only show proxy position when in a proxy space (vehicle or container)
+	var proxy_info = ""
+	if character.is_in_vehicle or character.is_in_container:
+		proxy_info = "Proxy Pos: (%.1f, %.1f, %.1f)\n" % [proxy_pos.x, proxy_pos.y, proxy_pos.z]
+
 	debug_label.text = """=== DEBUG INFO ===
+FPS: %.0f
 Current Space: %s
 In Vehicle: %s
 In Container: %s
 Vehicle Docked: %s
 World Pos: (%.1f, %.1f, %.1f)
-Proxy Pos: (%.1f, %.1f, %.1f)
-""" % [
+%s""" % [
+		fps_counter,
 		space_name,
 		"YES" if character.is_in_vehicle else "NO",
 		"YES" if character.is_in_container else "NO",
 		"YES" if vehicle_docked else "NO",
 		world_pos.x, world_pos.y, world_pos.z,
-		proxy_pos.x, proxy_pos.y, proxy_pos.z
+		proxy_info
 	]
 
 func _handle_input() -> void:
@@ -329,14 +356,15 @@ func _handle_input() -> void:
 	character.set_jump(Input.is_action_pressed("ui_accept") or Input.is_key_pressed(KEY_SPACE))
 	character.set_running(Input.is_key_pressed(KEY_SHIFT))
 
-	# Vehicle controls (always available)
-	if is_instance_valid(vehicle):
+	# Vehicle controls (only when player is IN the vehicle)
+	if is_instance_valid(vehicle) and character.is_in_vehicle:
 		_handle_vehicle_controls()
 
-	# Container controls (always available)
-	if is_instance_valid(vehicle_container_small):
+	# Container controls (only when player is IN that specific container)
+	# Note: Player can be in container directly OR via docked ship
+	if is_instance_valid(vehicle_container_small) and _is_player_in_container(vehicle_container_small):
 		_handle_container_controls_small()
-	if is_instance_valid(vehicle_container_large):
+	if is_instance_valid(vehicle_container_large) and _is_player_in_container(vehicle_container_large):
 		_handle_container_controls_large()
 
 func _handle_vehicle_controls() -> void:
@@ -364,16 +392,16 @@ func _handle_vehicle_controls() -> void:
 		var right = vehicle_basis.x
 		vehicle.apply_thrust(right, 15000.0)
 
-	# Vehicle VERTICAL controls (R/Y)
+	# Vehicle VERTICAL controls (R/Y) - Higher thrust to overcome gravity
 	if Input.is_key_pressed(KEY_R):
 		# Raise (positive Y in vehicle's local space)
 		var up = vehicle_basis.y
-		vehicle.apply_thrust(up, 15000.0)
+		vehicle.apply_thrust(up, 35000.0)  # Increased from 15000 to overcome gravity
 
 	if Input.is_key_pressed(KEY_Y):
 		# Lower (negative Y in vehicle's local space)
 		var down = -vehicle_basis.y
-		vehicle.apply_thrust(down, 15000.0)
+		vehicle.apply_thrust(down, 35000.0)  # Increased from 15000 for consistency
 
 	# Vehicle ROTATION controls (Arrow keys and Q/E)
 	# Pitch (Up/Down arrows)
@@ -666,31 +694,57 @@ func _check_transitions() -> void:
 					"ship_proxy_z": ship_proxy_pos.z
 				})
 
-			# Only transition if ship is docked AND player walked out the ship front
-			if exited_ship_front and is_instance_valid(vehicle) and vehicle.is_docked:
-				# Get current proxy velocity (velocity stays the same in proxy space)
+			# Check if player walked out of docked ship - use spatial detection
+			if exited_ship_front and is_instance_valid(vehicle):
+				# Get current proxy velocity and transform to world space
 				var proxy_velocity = character.get_proxy_velocity()
+				var vehicle_transform = vehicle.exterior_body.global_transform
+				var world_velocity = vehicle_transform.basis * proxy_velocity
 
-				# CRITICAL: When ship is docked, both ship and station share proxy_interior_space
-				# Ship's dock_proxy_body moves around, and floor moves with it
-				# Need to calculate where ship floor actually is based on dock_proxy_body position
+				# Transform current proxy position to world position
+				var world_pos = vehicle_transform.origin + vehicle_transform.basis * ship_proxy_pos
 
-				# Get ship's dock_proxy_body position
-				# With recursive nesting, each space has its own coordinates
-				# Player position in ship's interior space is relative to ship center
-				# Just use the same relative position in container's space
-				var container_proxy_pos = ship_proxy_pos
+				character.exit_vehicle()
 
-				print("[TRANSITION] Player exiting ship to container")
-				print("  Ship proxy pos: ", ship_proxy_pos)
-				print("  Container proxy pos: ", container_proxy_pos)
+				# Check if ship is docked and player exit position is inside container bounds
+				var should_enter_container = false
+				var container_transform: Transform3D
+				var container_proxy_pos: Vector3
 
-				# Set proxy_body's space to container's interior space
-				PhysicsServer3D.body_set_space(character.proxy_body, vehicle_container_small.get_interior_space())
+				if is_instance_valid(vehicle_container_small) and vehicle.is_docked:
+					# Transform world position to container local space
+					container_transform = vehicle_container_small.exterior_body.global_transform
+					var relative_pos = world_pos - container_transform.origin
+					var local_pos = container_transform.basis.inverse() * relative_pos
 
-				character.exit_vehicle()  # Leave ship
-				character.enter_container()  # Enter container
-				character.set_proxy_position(container_proxy_pos, proxy_velocity)
+					# Container is 5x ship: 90 wide (±45), 45 tall (floor -21 to ceiling +21), 150 long (±75)
+					# Check if exit position is actually INSIDE the container
+					var inside_container = (
+						abs(local_pos.x) < 45.0 and
+						local_pos.y > -21.0 and local_pos.y < 21.0 and
+						local_pos.z > -75.0 and local_pos.z < 75.0
+					)
+
+					should_enter_container = inside_container
+					container_proxy_pos = ship_proxy_pos  # Use ship proxy pos as container proxy pos
+
+				if should_enter_container:
+					# Exit position is inside container - enter container proxy space
+					var local_velocity = container_transform.basis.inverse() * world_velocity
+
+					# Set proxy_body's space to container's interior space
+					PhysicsServer3D.body_set_space(character.proxy_body, vehicle_container_small.get_interior_space())
+
+					character.enter_container()
+					character.set_proxy_position(container_proxy_pos, local_velocity)
+				else:
+					# Exit position is outside container OR ship not docked - exit to world space
+					# Adjust camera for 180° ship rotation - subtract PI from yaw
+					if is_instance_valid(dual_camera):
+						dual_camera.base_rotation.y -= PI
+
+					character.set_world_position(world_pos, world_velocity)
+
 				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 
 		else:
@@ -741,10 +795,6 @@ func _check_transitions() -> void:
 					local_pos.z
 				)
 
-				print("[TRANSITION] Player entering container from world")
-				print("  Container local pos: ", local_pos)
-				print("  Proxy pos (adjusted): ", proxy_pos)
-
 				# Set proxy_body's space to container's interior space
 				PhysicsServer3D.body_set_space(character.proxy_body, vehicle_container_small.get_interior_space())
 
@@ -753,42 +803,66 @@ func _check_transitions() -> void:
 				character.set_proxy_position(proxy_pos, local_velocity)
 				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 
-	# Check vehicle docking - use local space coordinates like player detection
-	if is_instance_valid(vehicle) and vehicle.exterior_body and is_instance_valid(vehicle_container_small) and vehicle_container_small.exterior_body:
-		# ALWAYS use exterior_body position transformed to container local space
-		# This avoids issues with dock_proxy_body being reset when undocking
-		var vehicle_world_pos = vehicle.exterior_body.global_position
-		var container_transform = vehicle_container_small.exterior_body.global_transform
-		var relative_pos = vehicle_world_pos - container_transform.origin
-		var local_pos = container_transform.basis.inverse() * relative_pos
+	# Check vehicle docking in BOTH containers - find which one ship is inside
+	if is_instance_valid(vehicle) and vehicle.exterior_body:
+		var containers = [vehicle_container_small, vehicle_container_large]
 
-		# Docking zone: ship must be well inside before docking triggers
-		# Container is 5x ship: 90 wide (±45), 45 tall (±22.5), 150 long (±75)
-		# Dock floor at Y=-21, ship half-height 1.5, so ship center at ~-19.5 when on floor
-		# Opening is at z=+75, pull back detection similar to player entrance
-		# Ship length is 30 units, so requiring z < 55 ensures ship is mostly inside
-		var vehicle_in_dock_zone = (
-			abs(local_pos.x) < 30.0 and  # Narrower than container (±45)
-			local_pos.y > -22.5 and local_pos.y < 22.5 and  # Tall enough for ship on floor (full container height)
-			local_pos.z > -60.0 and local_pos.z < 55.0  # Well inside container, not at entrance edge
-		)
+		for container in containers:
+			if not is_instance_valid(container) or not container.exterior_body:
+				continue
 
-		if vehicle_in_dock_zone and not vehicle.is_docked:
-			# Vehicle entering dock
-			_debounced_log("DOCKING", "Vehicle entered dock zone", {
-				"x": local_pos.x,
-				"y": local_pos.y,
-				"z": local_pos.z
-			})
-			vehicle.set_docked(true)
-		elif not vehicle_in_dock_zone and vehicle.is_docked:
-			# Vehicle leaving dock
-			_debounced_log("DOCKING", "Vehicle left dock zone", {
-				"x": local_pos.x,
-				"y": local_pos.y,
-				"z": local_pos.z
-			})
-			vehicle.set_docked(false)
+			# Transform ship position to this container's local space
+			var vehicle_world_pos = vehicle.exterior_body.global_position
+			var container_transform = container.exterior_body.global_transform
+			var relative_pos = vehicle_world_pos - container_transform.origin
+			var local_pos = container_transform.basis.inverse() * relative_pos
+
+			# Docking zone with HYSTERESIS - scaled by container size
+			# Small container (5x ship): 90 wide (±45), 45 tall (±22.5), 150 long (±75)
+			# Large container (10x ship): 180 wide (±90), 90 tall (±45), 300 long (±150)
+			var size_scale = 3.0 * container.size_multiplier
+			var half_width = 3.0 * size_scale
+			var half_height = 1.5 * size_scale
+			var half_length = 5.0 * size_scale
+
+			# Entry/exit thresholds with hysteresis
+			var enter_z = half_length - 20.0  # 20 units inside from front
+			var exit_z = half_length - 10.0   # 10 units buffer
+
+			var vehicle_fully_inside = (
+				abs(local_pos.x) < half_width - 15.0 and
+				local_pos.y > -half_height and local_pos.y < half_height and
+				local_pos.z > -half_length and local_pos.z < enter_z
+			)
+
+			var vehicle_outside = (
+				abs(local_pos.x) > half_width - 10.0 or
+				local_pos.y < -half_height - 5.0 or local_pos.y > half_height + 5.0 or
+				local_pos.z < -half_length - 10.0 or local_pos.z > exit_z
+			)
+
+			if vehicle_fully_inside and not vehicle.is_docked:
+				# Vehicle entering THIS container
+				var container_name = "Small" if container == vehicle_container_small else "Large"
+				_debounced_log("DOCKING", "Vehicle entered " + container_name + " container", {
+					"x": local_pos.x,
+					"y": local_pos.y,
+					"z": local_pos.z
+				})
+				vehicle.set_docked(true, container)
+				break  # Only dock in one container
+			elif vehicle_outside and vehicle.is_docked:
+				# Check if docked in THIS container before undocking
+				var docked_container = vehicle._get_docked_container()
+				if docked_container == container:
+					# Vehicle leaving THIS container
+					_debounced_log("DOCKING", "Vehicle left dock zone", {
+						"x": local_pos.x,
+						"y": local_pos.y,
+						"z": local_pos.z
+					})
+					vehicle.set_docked(false, container)
+					break
 
 	# Check container-in-container docking (small container docking in large container)
 	if is_instance_valid(vehicle_container_small) and vehicle_container_small.exterior_body and is_instance_valid(vehicle_container_large) and vehicle_container_large.exterior_body:
@@ -798,21 +872,49 @@ func _check_transitions() -> void:
 		var relative_pos = small_world_pos - large_transform.origin
 		var local_pos = large_transform.basis.inverse() * relative_pos
 
-		# Docking zone: small container must be well inside large container
+		# Docking zone with HYSTERESIS for containers
 		# Large container is 10x ship: 180 wide (±90), 90 tall (±45), 300 long (±150)
 		# Small container is 5x ship: 90 wide (±45), 45 tall (±22.5), 150 long (±75)
 		# Opening is at z=+150 for large container
-		var small_in_large_dock_zone = (
-			abs(local_pos.x) < 60.0 and  # Narrower than large container
-			local_pos.y > -45.0 and local_pos.y < 45.0 and  # Full height of large container
-			local_pos.z > -120.0 and local_pos.z < 110.0  # Well inside, not at entrance edge
+		# ENTER zone: z < 110 (container must be well inside)
+		# EXIT zone: z > 130 (container must move significantly out)
+		var small_fully_inside = (
+			abs(local_pos.x) < 60.0 and
+			local_pos.y > -45.0 and local_pos.y < 45.0 and
+			local_pos.z > -120.0 and local_pos.z < 110.0  # Enter threshold
 		)
 
-		if small_in_large_dock_zone and not vehicle_container_small.is_docked:
+		var small_outside = (
+			abs(local_pos.x) > 70.0 or  # Wider exit threshold
+			local_pos.y < -50.0 or local_pos.y > 50.0 or
+			local_pos.z < -130.0 or local_pos.z > 130.0  # Exit threshold (20 units more permissive)
+		)
+
+		if small_fully_inside and not vehicle_container_small.is_docked:
 			# Small container entering large container dock
-			print("[CONTAINER DOCKING] Small container entered large container dock zone")
 			vehicle_container_small.set_docked(true, vehicle_container_large)
-		elif not small_in_large_dock_zone and vehicle_container_small.is_docked:
-			# Small container leaving large container dock
-			print("[CONTAINER DOCKING] Small container left large container dock zone")
+		elif small_outside and vehicle_container_small.is_docked:
+			# Small container leaving large container dock (requires moving further out)
 			vehicle_container_small.set_docked(false, vehicle_container_large)
+
+func _is_player_in_container(container: VehicleContainer) -> bool:
+	# Check if player is in this specific container
+	# Player is in container if:
+	# 1. They're directly in the container (character.is_in_container)
+	# 2. They're in a vehicle that's docked in this container
+
+	# Direct container check
+	if character.is_in_container:
+		# Get the container's interior space RID
+		var container_space = container.get_interior_space()
+		var player_space = PhysicsServer3D.body_get_space(character.proxy_body)
+		if player_space == container_space:
+			return true
+
+	# Check if player is in vehicle docked in this container
+	if character.is_in_vehicle and is_instance_valid(vehicle) and vehicle.is_docked:
+		var docked_container = vehicle._get_docked_container()
+		if docked_container == container:
+			return true
+
+	return false

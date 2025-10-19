@@ -118,7 +118,7 @@ func _create_ground_plane() -> void:
 	var plane_mesh := PlaneMesh.new()
 	plane_mesh.size = Vector2(10000, 10000)
 	ground_mesh.mesh = plane_mesh
-	ground_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	ground_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF  # Disable shadows for performance
 
 	var ground_material := StandardMaterial3D.new()
 	ground_material.albedo_color = Color(0.6, 0.7, 0.6)  # Brighter ground
@@ -177,15 +177,9 @@ func _create_lighting() -> void:
 	ambient_env.adjustment_enabled = true
 	ambient_env.adjustment_brightness = 1.2  # Boost overall brightness
 
-	# Enable SSAO for better depth perception
-	ambient_env.ssao_enabled = true
-	ambient_env.ssao_radius = 2.0
-	ambient_env.ssao_intensity = 1.5
-
-	# Enable SSIL for bounce lighting
-	ambient_env.ssil_enabled = true
-	ambient_env.ssil_radius = 8.0
-	ambient_env.ssil_intensity = 1.0
+	# Disable SSAO/SSIL for better performance
+	ambient_env.ssao_enabled = false
+	ambient_env.ssil_enabled = false
 
 	var world_env := WorldEnvironment.new()
 	world_env.environment = ambient_env
@@ -199,7 +193,7 @@ func _create_stars() -> void:
 	add_child(mesh_instance)
 
 	immediate_mesh.surface_begin(Mesh.PRIMITIVE_POINTS)
-	for i in range(1000):
+	for i in range(200):  # Reduced from 1000 for performance
 		var x = randf_range(-1000, 1000)
 		var y = randf_range(-1000, 1000)
 		var z = randf_range(-1000, 1000)
@@ -237,17 +231,11 @@ SHIP CONTROLS (when inside ship):
   Q/E - Roll
   B - Toggle Docking Magnetism
 
-SMALL DOCKING STATION CONTROLS:
+CONTAINER CONTROLS (when in active container):
   I - Forward    | U - Raise
   J - Left       | P - Lower
   K - Backward   |
   L - Right      |
-
-LARGE DOCKING STATION CONTROLS:
-  Numpad 8 - Forward    | Numpad 7 - Raise
-  Numpad 4 - Left       | Numpad 9 - Lower
-  Numpad 5 - Backward   |
-  Numpad 6 - Right      |
 """
 
 	# Style the label
@@ -315,8 +303,20 @@ func _update_debug_ui() -> void:
 	if character.is_in_vehicle or character.is_in_container:
 		proxy_info = "Proxy Pos: (%.1f, %.1f, %.1f)\n" % [proxy_pos.x, proxy_pos.y, proxy_pos.z]
 
+	# Count active physics spaces for performance debugging
+	var active_spaces = 1  # World space always active
+	if is_instance_valid(vehicle) and vehicle.vehicle_interior_space.is_valid():
+		if PhysicsServer3D.space_is_active(vehicle.vehicle_interior_space):
+			active_spaces += 1
+	if is_instance_valid(vehicle_container_small) and vehicle_container_small.container_interior_space.is_valid():
+		if PhysicsServer3D.space_is_active(vehicle_container_small.container_interior_space):
+			active_spaces += 1
+	if is_instance_valid(vehicle_container_large) and vehicle_container_large.container_interior_space.is_valid():
+		if PhysicsServer3D.space_is_active(vehicle_container_large.container_interior_space):
+			active_spaces += 1
+
 	debug_label.text = """=== DEBUG INFO ===
-FPS: %.0f
+FPS: %.0f | Spaces: %d
 Current Space: %s
 In Vehicle: %s
 In Container: %s
@@ -324,6 +324,7 @@ Vehicle Docked: %s
 World Pos: (%.1f, %.1f, %.1f)
 %s""" % [
 		fps_counter,
+		active_spaces,
 		space_name,
 		"YES" if character.is_in_vehicle else "NO",
 		"YES" if character.is_in_container else "NO",
@@ -360,37 +361,33 @@ func _handle_input() -> void:
 	if is_instance_valid(vehicle) and character.is_in_vehicle:
 		_handle_vehicle_controls()
 
-	# Container controls (only when player is IN that specific container)
-	# Note: Player can be in container directly OR via docked ship
-	if is_instance_valid(vehicle_container_small) and _is_player_in_container(vehicle_container_small):
-		_handle_container_controls_small()
-	if is_instance_valid(vehicle_container_large) and _is_player_in_container(vehicle_container_large):
-		_handle_container_controls_large()
+	# Container controls - unified controls for whichever container player is in
+	_handle_container_controls()
 
 func _handle_vehicle_controls() -> void:
 	# Get vehicle basis for directional movement
 	var vehicle_basis = vehicle.exterior_body.global_transform.basis
 
-	# Vehicle DIRECTIONAL controls (TFGH)
+	# Vehicle DIRECTIONAL controls (TFGH) - Strong thrust for responsive movement
 	if Input.is_key_pressed(KEY_T):
 		# Forward (negative Z in vehicle's local space)
 		var forward = -vehicle_basis.z
-		vehicle.apply_thrust(forward, 15000.0)
+		vehicle.apply_thrust(forward, 40000.0)  # Increased from 15000
 
 	if Input.is_key_pressed(KEY_G):
 		# Backward (positive Z in vehicle's local space)
 		var backward = vehicle_basis.z
-		vehicle.apply_thrust(backward, 15000.0)
+		vehicle.apply_thrust(backward, 40000.0)  # Increased from 15000
 
 	if Input.is_key_pressed(KEY_F):
 		# Left (negative X in vehicle's local space)
 		var left = -vehicle_basis.x
-		vehicle.apply_thrust(left, 15000.0)
+		vehicle.apply_thrust(left, 40000.0)  # Increased from 15000
 
 	if Input.is_key_pressed(KEY_H):
 		# Right (positive X in vehicle's local space)
 		var right = vehicle_basis.x
-		vehicle.apply_thrust(right, 15000.0)
+		vehicle.apply_thrust(right, 40000.0)  # Increased from 15000
 
 	# Vehicle VERTICAL controls (R/Y) - Higher thrust to overcome gravity
 	if Input.is_key_pressed(KEY_R):
@@ -433,77 +430,58 @@ func _handle_vehicle_controls() -> void:
 		if vehicle.is_docked:
 			vehicle.toggle_magnetism()
 
-func _handle_container_controls_small() -> void:
-	# Get container basis for directional movement
-	var container_basis = vehicle_container_small.exterior_body.global_transform.basis
+func _handle_container_controls() -> void:
+	# Determine which container the player is in (if any)
+	var current_container: VehicleContainer = null
+	var thrust_force: float = 0.0
 
-	# Container DIRECTIONAL controls (IJKL)
+	# Check if player is in small container
+	if is_instance_valid(vehicle_container_small) and _is_player_in_container(vehicle_container_small):
+		current_container = vehicle_container_small
+		thrust_force = 15000.0
+	# Check if player is in large container
+	elif is_instance_valid(vehicle_container_large) and _is_player_in_container(vehicle_container_large):
+		current_container = vehicle_container_large
+		thrust_force = 25000.0  # Larger container needs more thrust
+
+	# If not in any container, return early
+	if not is_instance_valid(current_container):
+		return
+
+	# Get container basis for directional movement
+	var container_basis = current_container.exterior_body.global_transform.basis
+
+	# Container DIRECTIONAL controls (IJKL) - same for all containers
 	if Input.is_key_pressed(KEY_I):
 		# Forward (negative Z in container's local space)
 		var forward = -container_basis.z
-		vehicle_container_small.apply_thrust(forward, 10000.0)
+		current_container.apply_thrust(forward, thrust_force)
 
 	if Input.is_key_pressed(KEY_K):
 		# Backward (positive Z in container's local space)
 		var backward = container_basis.z
-		vehicle_container_small.apply_thrust(backward, 10000.0)
+		current_container.apply_thrust(backward, thrust_force)
 
 	if Input.is_key_pressed(KEY_J):
 		# Left (negative X in container's local space)
 		var left = -container_basis.x
-		vehicle_container_small.apply_thrust(left, 10000.0)
+		current_container.apply_thrust(left, thrust_force)
 
 	if Input.is_key_pressed(KEY_L):
 		# Right (positive X in container's local space)
 		var right = container_basis.x
-		vehicle_container_small.apply_thrust(right, 10000.0)
+		current_container.apply_thrust(right, thrust_force)
 
-	# Container VERTICAL controls (U/P)
+	# Container VERTICAL controls (U/P) - higher thrust to overcome gravity
 	if Input.is_key_pressed(KEY_U):
 		# Raise (positive Y in container's local space)
 		var up = container_basis.y
-		vehicle_container_small.apply_thrust(up, 10000.0)
+		current_container.apply_thrust(up, thrust_force * 2.0)
 
 	if Input.is_key_pressed(KEY_P):
 		# Lower (negative Y in container's local space)
 		var down = -container_basis.y
-		vehicle_container_small.apply_thrust(down, 10000.0)
-
-func _handle_container_controls_large() -> void:
-	# Get container basis for directional movement
-	var container_basis = vehicle_container_large.exterior_body.global_transform.basis
-
-	# Container DIRECTIONAL controls (Numpad 8/5/4/6)
-	if Input.is_key_pressed(KEY_KP_8):
-		# Forward
-		var forward = -container_basis.z
-		vehicle_container_large.apply_thrust(forward, 20000.0)
-
-	if Input.is_key_pressed(KEY_KP_5):
-		# Backward
-		var backward = container_basis.z
-		vehicle_container_large.apply_thrust(backward, 20000.0)
-
-	if Input.is_key_pressed(KEY_KP_4):
-		# Left
-		var left = -container_basis.x
-		vehicle_container_large.apply_thrust(left, 20000.0)
-
-	if Input.is_key_pressed(KEY_KP_6):
-		# Right
-		var right = container_basis.x
-		vehicle_container_large.apply_thrust(right, 20000.0)
-
-	# Container VERTICAL controls (Numpad 7/9)
-	if Input.is_key_pressed(KEY_KP_7):
-		# Raise
-		var up = container_basis.y
-		vehicle_container_large.apply_thrust(up, 20000.0)
-
-	if Input.is_key_pressed(KEY_KP_9):
-		# Lower
-		var down = -container_basis.y
-		vehicle_container_large.apply_thrust(down, 20000.0)
+		current_container.apply_thrust(down, thrust_force * 2.0)
 
 func _check_transitions() -> void:
 	if not is_instance_valid(character):
@@ -533,20 +511,22 @@ func _check_transitions() -> void:
 
 				# Check if ship is docked and player exit position is inside container bounds
 				var should_enter_container = false
-				var container_transform: Transform3D  # Declare outside if block so it's in scope for later use
+				var container_transform: Transform3D
+				var container_proxy_pos: Vector3
 
 				if is_instance_valid(vehicle_container_small) and vehicle.is_docked:
-					# Transform world position to container local space
 					container_transform = vehicle_container_small.exterior_body.global_transform
-					var relative_pos = world_pos - container_transform.origin
-					var local_pos = container_transform.basis.inverse() * relative_pos
+
+					# Calculate where player will be in container space
+					var ship_dock_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+					container_proxy_pos = ship_dock_transform.origin + ship_dock_transform.basis * proxy_pos
 
 					# Container is 5x ship: 90 wide (±45), 45 tall (floor -21 to ceiling +21), 150 long (±75)
-					# Check if exit position is actually INSIDE the container
+					# Check if exit position is actually INSIDE the container interior space
 					var inside_container = (
-						abs(local_pos.x) < 45.0 and
-						local_pos.y > -21.0 and local_pos.y < 21.0 and
-						local_pos.z > -75.0 and local_pos.z < 75.0
+						abs(container_proxy_pos.x) < 45.0 and
+						container_proxy_pos.y > -21.0 and container_proxy_pos.y < 21.0 and
+						container_proxy_pos.z > -75.0 and container_proxy_pos.z < 75.0
 					)
 
 					should_enter_container = inside_container
@@ -555,12 +535,6 @@ func _check_transitions() -> void:
 					# Exit position is inside container - enter container proxy space
 					# Don't adjust camera - we're staying in proxy space (ship -> container)
 					var local_velocity = container_transform.basis.inverse() * world_velocity
-
-					# CRITICAL: With recursive nesting, ship and container have separate interior spaces
-					# Need to transfer player from ship's space to container's space
-					# Player position is already in ship's local coordinates (relative to ship center)
-					# Just use the same relative position in container's space
-					var container_proxy_pos = proxy_pos
 
 					# Set proxy_body's space to container's interior space
 					PhysicsServer3D.body_set_space(character.proxy_body, vehicle_container_small.get_interior_space())
@@ -608,6 +582,7 @@ func _check_transitions() -> void:
 
 				# Set proxy_body's space to vehicle's interior space
 				PhysicsServer3D.body_set_space(character.proxy_body, vehicle.get_interior_space())
+
 
 				# Seamlessly enter - use exact transformed position (no clamping)
 				# This matches the exit behavior which is perfectly seamless
@@ -798,6 +773,7 @@ func _check_transitions() -> void:
 				# Set proxy_body's space to container's interior space
 				PhysicsServer3D.body_set_space(character.proxy_body, vehicle_container_small.get_interior_space())
 
+
 				# Seamlessly enter - use transformed position
 				character.enter_container()
 				character.set_proxy_position(proxy_pos, local_velocity)
@@ -811,11 +787,27 @@ func _check_transitions() -> void:
 			if not is_instance_valid(container) or not container.exterior_body:
 				continue
 
-			# Transform ship position to this container's local space
-			var vehicle_world_pos = vehicle.exterior_body.global_position
-			var container_transform = container.exterior_body.global_transform
-			var relative_pos = vehicle_world_pos - container_transform.origin
-			var local_pos = container_transform.basis.inverse() * relative_pos
+			# Get ship position in container's local space
+			# When docked: use proxy position directly (already in container space)
+			# When not docked: transform exterior position to container space
+			var local_pos: Vector3
+
+			if vehicle.is_docked and vehicle.dock_proxy_body.is_valid():
+				# Ship is docked - check if it's docked in THIS container
+				var docked_container = vehicle._get_docked_container()
+				if docked_container == container:
+					# Ship is docked in THIS container - get position from proxy body directly
+					var proxy_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+					local_pos = proxy_transform.origin
+				else:
+					# Ship is docked in a DIFFERENT container - skip this container
+					continue
+			else:
+				# Ship is in world space - transform to container local space
+				var vehicle_world_pos = vehicle.exterior_body.global_position
+				var container_transform = container.exterior_body.global_transform
+				var relative_pos = vehicle_world_pos - container_transform.origin
+				local_pos = container_transform.basis.inverse() * relative_pos
 
 			# Docking zone with HYSTERESIS - scaled by container size
 			# Small container (5x ship): 90 wide (±45), 45 tall (±22.5), 150 long (±75)
@@ -825,24 +817,32 @@ func _check_transitions() -> void:
 			var half_height = 1.5 * size_scale
 			var half_length = 5.0 * size_scale
 
-			# Entry/exit thresholds with hysteresis
-			var enter_z = half_length - 20.0  # 20 units inside from front
-			var exit_z = half_length - 10.0   # 10 units buffer
+			# Seamless entry/exit at boundary - like player transitions
+			# Ship collision box is 30 units long (±15 from center)
+			# Enter when ship's ENTIRE collision box is inside container
+			# Container front is at z=half_length (75 for small, 150 for large)
+			var ship_half_length = 15.0  # Ship collision box half-length
+			var enter_z = half_length - ship_half_length - 5.0   # Enter when fully inside (ship front < container front)
 
-			var vehicle_fully_inside = (
-				abs(local_pos.x) < half_width - 15.0 and
-				local_pos.y > -half_height and local_pos.y < half_height and
-				local_pos.z > -half_length and local_pos.z < enter_z
+			# CRITICAL: Exit EARLY while ship is still mostly inside
+			# This allows ship to transition to world physics before leaving container exterior
+			# Exit when ship center reaches near the opening (not when fully outside)
+			var exit_z = enter_z + 10.0  # Exit just 10 units past entry point (still well inside)
+
+			var vehicle_inside = (
+				abs(local_pos.x) < half_width - 5.0 and
+				local_pos.y > -half_height - 5.0 and local_pos.y < half_height + 5.0 and
+				local_pos.z < enter_z  # Inside front boundary
 			)
 
 			var vehicle_outside = (
-				abs(local_pos.x) > half_width - 10.0 or
-				local_pos.y < -half_height - 5.0 or local_pos.y > half_height + 5.0 or
-				local_pos.z < -half_length - 10.0 or local_pos.z > exit_z
+				abs(local_pos.x) > half_width + 5.0 or
+				local_pos.y < -half_height - 10.0 or local_pos.y > half_height + 10.0 or
+				local_pos.z < -half_length - 10.0 or local_pos.z > exit_z  # Exit EARLY while still inside
 			)
 
-			if vehicle_fully_inside and not vehicle.is_docked:
-				# Vehicle entering THIS container
+			if vehicle_inside and not vehicle.is_docked:
+				# Vehicle entering THIS container - seamless transition at boundary
 				var container_name = "Small" if container == vehicle_container_small else "Large"
 				_debounced_log("DOCKING", "Vehicle entered " + container_name + " container", {
 					"x": local_pos.x,
@@ -896,6 +896,8 @@ func _check_transitions() -> void:
 		elif small_outside and vehicle_container_small.is_docked:
 			# Small container leaving large container dock (requires moving further out)
 			vehicle_container_small.set_docked(false, vehicle_container_large)
+
+# Space activation/deactivation functions removed - spaces are now always active to avoid initialization issues
 
 func _is_player_in_container(container: VehicleContainer) -> bool:
 	# Check if player is in this specific container

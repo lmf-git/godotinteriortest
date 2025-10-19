@@ -619,12 +619,18 @@ func _check_transitions() -> void:
 					var container_velocity = character.get_proxy_velocity()
 					var ship_local_velocity = ship_dock_transform.basis.inverse() * container_velocity
 
+					# CRITICAL: Exit container state before entering vehicle
+					# This ensures clean transition from container -> vehicle
+					character.exit_container()
+
 					# Set proxy_body's space to vehicle's interior space
 					PhysicsServer3D.body_set_space(character.proxy_body, vehicle.get_interior_space())
 
 					character.enter_vehicle()
 					character.set_proxy_position(ship_local_pos, ship_local_velocity)
 					vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
+
+					print("  Entered ship at position: ", ship_local_pos)
 
 	if not is_instance_valid(vehicle_container_small):
 		return

@@ -97,10 +97,10 @@ func _create_container_exterior() -> void:
 	# Create container as SCALED UP VERSION OF SHIP (exactly like ship but bigger)
 	exterior_body = RigidBody3D.new()
 	exterior_body.name = "ExteriorBody"
-	exterior_body.mass = 50000.0 * size_multiplier  # Mass scales with size
+	exterior_body.mass = 500000.0 * size_multiplier  # Very heavy - 500x ship mass (1000 kg)
 	exterior_body.gravity_scale = 1.0  # Enable gravity so it sits on ground
-	exterior_body.linear_damp = 5.0  # Heavy damping - it's a station
-	exterior_body.angular_damp = 5.0
+	exterior_body.linear_damp = 10.0  # Very heavy damping - it's a massive station
+	exterior_body.angular_damp = 10.0
 	add_child(exterior_body)
 
 	var material := StandardMaterial3D.new()

@@ -350,20 +350,46 @@ func _create_proxy_interior_visuals() -> void:
 func _create_vehicle_dock_proxy() -> void:
 	# Create vehicle physics body for when docked in a container
 	# Space will be set to parent container's interior space during docking
-	# (not created in shared space - each container has its own space)
+	# CRITICAL: Shape must match exterior_body - walls with OPEN FRONT for player access
 
-	# IMPORTANT: Match the actual ship dimensions (scaled by 3x)
-	# Ship floor is 6*3 wide, 10*3 long, 3*3 tall
-	# Half-extents for collision: 9 wide, 4.5 tall, 15 long
 	var size_scale = 3.0
-	var vehicle_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(vehicle_shape, Vector3(3.0 * size_scale, 1.5 * size_scale, 5.0 * size_scale))
 
 	dock_proxy_body = PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(dock_proxy_body, PhysicsServer3D.BODY_MODE_RIGID)
-	# NOTE: Space not set here - will be set to parent container's interior space when docking
-	PhysicsServer3D.body_add_shape(dock_proxy_body, vehicle_shape)
 	PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3.ZERO))
+
+	# Create separate collision shapes matching exterior_body geometry
+	# Floor
+	var floor_shape = PhysicsServer3D.box_shape_create()
+	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
+	PhysicsServer3D.body_add_shape(dock_proxy_body, floor_shape)
+	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 0, Transform3D(Basis(), Vector3(0, -1.4 * size_scale, 0)))
+
+	# Left wall
+	var left_wall_shape = PhysicsServer3D.box_shape_create()
+	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.1, 1.5 * size_scale, 5.0 * size_scale))
+	PhysicsServer3D.body_add_shape(dock_proxy_body, left_wall_shape)
+	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 1, Transform3D(Basis(), Vector3(-3.0 * size_scale, 0, 0)))
+
+	# Right wall
+	var right_wall_shape = PhysicsServer3D.box_shape_create()
+	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.1, 1.5 * size_scale, 5.0 * size_scale))
+	PhysicsServer3D.body_add_shape(dock_proxy_body, right_wall_shape)
+	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 2, Transform3D(Basis(), Vector3(3.0 * size_scale, 0, 0)))
+
+	# Back wall (closed)
+	var back_wall_shape = PhysicsServer3D.box_shape_create()
+	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(3.0 * size_scale, 1.5 * size_scale, 0.1))
+	PhysicsServer3D.body_add_shape(dock_proxy_body, back_wall_shape)
+	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 3, Transform3D(Basis(), Vector3(0, 0, -5.0 * size_scale)))
+
+	# Ceiling
+	var ceiling_shape = PhysicsServer3D.box_shape_create()
+	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
+	PhysicsServer3D.body_add_shape(dock_proxy_body, ceiling_shape)
+	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 4, Transform3D(Basis(), Vector3(0, 1.4 * size_scale, 0)))
+
+	# NO FRONT WALL - this is the opening where player can enter
 
 	# Enable collision with container interiors (layer 1, mask 1)
 	PhysicsServer3D.body_set_collision_layer(dock_proxy_body, 1)
@@ -371,8 +397,8 @@ func _create_vehicle_dock_proxy() -> void:
 
 	# Physics parameters for docked ship
 	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_GRAVITY_SCALE, 1.0)  # Normal gravity
-	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_LINEAR_DAMP, 5.0)  # Heavy damping to stop quickly
-	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_ANGULAR_DAMP, 5.0)  # Heavy damping for rotation
+	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_LINEAR_DAMP, 0.5)  # Minimal damping - feels like air, not water
+	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_ANGULAR_DAMP, 0.5)  # Minimal damping for rotation
 	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_MASS, 1000.0)  # Same as exterior_body
 	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_BOUNCE, 0.0)  # No bounce
 	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_FRICTION, 1.0)  # Maximum friction to prevent sliding
@@ -466,10 +492,10 @@ func apply_thrust(direction: Vector3, force: float) -> void:
 			var current_vel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
 			var new_vel = current_vel + impulse
 
-			# Clamp to reasonable max speeds for confined space (12 m/s horizontal, 8 m/s vertical)
-			new_vel.x = clamp(new_vel.x, -12.0, 12.0)
-			new_vel.y = clamp(new_vel.y, -8.0, 8.0)
-			new_vel.z = clamp(new_vel.z, -12.0, 12.0)
+			# Clamp to high max speeds - only prevent physics explosions, not normal flight
+			new_vel.x = clamp(new_vel.x, -30.0, 30.0)
+			new_vel.y = clamp(new_vel.y, -20.0, 20.0)
+			new_vel.z = clamp(new_vel.z, -30.0, 30.0)
 
 			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, new_vel)
 	elif exterior_body:
@@ -492,10 +518,10 @@ func apply_rotation(axis: Vector3, torque: float) -> void:
 			var current_angvel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
 			var new_angvel = current_angvel + angular_impulse
 
-			# Clamp angular velocity to safe rotation speeds (1.5 rad/s = ~86 deg/s)
-			new_angvel.x = clamp(new_angvel.x, -1.5, 1.5)
-			new_angvel.y = clamp(new_angvel.y, -1.5, 1.5)
-			new_angvel.z = clamp(new_angvel.z, -1.5, 1.5)
+			# Clamp angular velocity to reasonable rotation speeds (3.0 rad/s = ~172 deg/s)
+			new_angvel.x = clamp(new_angvel.x, -3.0, 3.0)
+			new_angvel.y = clamp(new_angvel.y, -3.0, 3.0)
+			new_angvel.z = clamp(new_angvel.z, -3.0, 3.0)
 
 			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, new_angvel)
 	elif exterior_body:
@@ -589,6 +615,11 @@ func set_docked(docked: bool, parent_container: VehicleContainer = null) -> void
 				# Similar to how player's world_body continues to exist when in vehicle/container
 				exterior_body.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 				exterior_body.freeze = true  # Enable kinematic mode
+
+				# CRITICAL: Disable collision on exterior_body to prevent physics conflicts
+				# Only dock_proxy_body should have active physics when docked
+				exterior_body.collision_layer = 0
+				exterior_body.collision_mask = 0
 	elif not docked and is_docked:
 		# Ship is leaving dock - transfer position from container's interior space to world
 		if exterior_body and dock_proxy_body.is_valid():
@@ -613,6 +644,10 @@ func set_docked(docked: bool, parent_container: VehicleContainer = null) -> void
 				# CRITICAL: Restore exterior_body to rigid mode after undocking
 				# Exterior_body is now the active physics body again
 				exterior_body.freeze = false  # Disable kinematic
+
+				# Re-enable collision on exterior_body
+				exterior_body.collision_layer = 1
+				exterior_body.collision_mask = 1
 
 				# NOW set correct velocities from container's interior space to world space
 				var local_velocity = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)

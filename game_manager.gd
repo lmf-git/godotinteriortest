@@ -572,6 +572,7 @@ func _check_transitions() -> void:
 			)
 
 			if at_entrance and not character.is_in_container:
+				# Player in world space entering ship
 				# Adjust camera for 180° ship rotation - add PI to yaw
 				if is_instance_valid(dual_camera):
 					dual_camera.base_rotation.y += PI
@@ -583,12 +584,47 @@ func _check_transitions() -> void:
 				# Set proxy_body's space to vehicle's interior space
 				PhysicsServer3D.body_set_space(character.proxy_body, vehicle.get_interior_space())
 
-
 				# Seamlessly enter - use exact transformed position (no clamping)
 				# This matches the exit behavior which is perfectly seamless
 				character.enter_vehicle()
 				character.set_proxy_position(local_pos, local_velocity)
 				vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
+			elif character.is_in_container and vehicle.is_docked:
+				# Player in container space, check if can enter docked ship
+				# Get player position in container space
+				var player_container_pos = character.get_proxy_position()
+
+				# Get ship's dock_proxy_body position in container space
+				var ship_dock_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+
+				# Calculate player position relative to ship
+				var relative_to_ship = player_container_pos - ship_dock_transform.origin
+				var ship_local_pos = ship_dock_transform.basis.inverse() * relative_to_ship
+
+				# Check if at ship entrance (same bounds as world entry)
+				var at_docked_ship_entrance = (
+					abs(ship_local_pos.x) < 9.0 and
+					abs(ship_local_pos.y) < 4.5 and
+					ship_local_pos.z > 14.0 and ship_local_pos.z < 15.0
+				)
+
+				if at_docked_ship_entrance:
+					# Player entering docked ship from container
+					print("ENTERING DOCKED SHIP:")
+					print("  Player container pos: ", player_container_pos)
+					print("  Ship dock pos: ", ship_dock_transform.origin)
+					print("  Ship local pos (setting): ", ship_local_pos)
+
+					# Get velocity in container space and transform to ship space
+					var container_velocity = character.get_proxy_velocity()
+					var ship_local_velocity = ship_dock_transform.basis.inverse() * container_velocity
+
+					# Set proxy_body's space to vehicle's interior space
+					PhysicsServer3D.body_set_space(character.proxy_body, vehicle.get_interior_space())
+
+					character.enter_vehicle()
+					character.set_proxy_position(ship_local_pos, ship_local_velocity)
+					vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
 
 	if not is_instance_valid(vehicle_container_small):
 		return

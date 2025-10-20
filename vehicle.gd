@@ -144,7 +144,7 @@ func _create_vehicle_physics_space() -> void:
 		return
 
 	vehicle_interior_space = PhysicsServer3D.space_create()
-	PhysicsServer3D.space_set_active(vehicle_interior_space, true)  # Keep always active to avoid initialization issues
+	PhysicsServer3D.space_set_active(vehicle_interior_space, false)  # Start inactive, activate on demand
 
 	# Create gravity area for this vehicle's interior
 	var gravity_area = PhysicsServer3D.area_create()
@@ -603,6 +603,11 @@ func set_docked(docked: bool, parent_container: VehicleContainer = null) -> void
 				if not container_interior_space.is_valid():
 					push_error("Container interior space not valid!")
 					return
+
+				# Activate container space if not already active
+				if not PhysicsServer3D.space_is_active(container_interior_space):
+					PhysicsServer3D.space_set_active(container_interior_space, true)
+
 				PhysicsServer3D.body_set_space(dock_proxy_body, container_interior_space)
 
 				# CRITICAL: State might be reset when adding to space - set it AGAIN after adding

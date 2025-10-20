@@ -509,6 +509,12 @@ func _check_transitions() -> void:
 
 				character.exit_vehicle()
 
+				# Check if vehicle space can be deactivated (no one left inside)
+				if not _is_anyone_in_vehicle():
+					var vehicle_space = vehicle.get_interior_space()
+					if PhysicsServer3D.space_is_active(vehicle_space):
+						PhysicsServer3D.space_set_active(vehicle_space, false)
+
 				# Check if ship is docked and player exit position is inside container bounds
 				var should_enter_container = false
 				var container_transform: Transform3D
@@ -581,8 +587,13 @@ func _check_transitions() -> void:
 				var world_velocity = character.get_world_velocity()
 				var local_velocity = vehicle_transform.basis.inverse() * world_velocity
 
+				# Activate vehicle interior space if needed
+				var vehicle_space = vehicle.get_interior_space()
+				if not PhysicsServer3D.space_is_active(vehicle_space):
+					PhysicsServer3D.space_set_active(vehicle_space, true)
+
 				# Set proxy_body's space to vehicle's interior space
-				PhysicsServer3D.body_set_space(character.proxy_body, vehicle.get_interior_space())
+				PhysicsServer3D.body_set_space(character.proxy_body, vehicle_space)
 
 				# Seamlessly enter - use exact transformed position (no clamping)
 				# This matches the exit behavior which is perfectly seamless
@@ -623,8 +634,13 @@ func _check_transitions() -> void:
 					# This ensures clean transition from container -> vehicle
 					character.exit_container()
 
+					# Activate vehicle interior space if needed
+					var vehicle_space = vehicle.get_interior_space()
+					if not PhysicsServer3D.space_is_active(vehicle_space):
+						PhysicsServer3D.space_set_active(vehicle_space, true)
+
 					# Set proxy_body's space to vehicle's interior space
-					PhysicsServer3D.body_set_space(character.proxy_body, vehicle.get_interior_space())
+					PhysicsServer3D.body_set_space(character.proxy_body, vehicle_space)
 
 					character.enter_vehicle()
 					character.set_proxy_position(ship_local_pos, ship_local_velocity)
@@ -661,6 +677,12 @@ func _check_transitions() -> void:
 				var world_pos = container_transform.origin + container_transform.basis * local_pos
 
 				character.exit_container()
+
+				# Check if container space can be deactivated (no one left inside)
+				if not _is_anyone_in_container(vehicle_container_small):
+					var container_space = vehicle_container_small.get_interior_space()
+					if PhysicsServer3D.space_is_active(container_space):
+						PhysicsServer3D.space_set_active(container_space, false)
 
 				# Check if should enter vehicle that's docked inside
 				if is_instance_valid(vehicle) and vehicle.is_docked:
@@ -723,6 +745,12 @@ func _check_transitions() -> void:
 
 				character.exit_vehicle()
 
+				# Check if vehicle space can be deactivated (no one left inside)
+				if not _is_anyone_in_vehicle():
+					var vehicle_space = vehicle.get_interior_space()
+					if PhysicsServer3D.space_is_active(vehicle_space):
+						PhysicsServer3D.space_set_active(vehicle_space, false)
+
 				# Check if ship is docked and player exit position is inside container bounds
 				var should_enter_container = false
 				var container_transform: Transform3D
@@ -749,8 +777,13 @@ func _check_transitions() -> void:
 					# Exit position is inside container - enter container proxy space
 					var local_velocity = container_transform.basis.inverse() * world_velocity
 
+					# Activate container space if needed
+					var container_space = vehicle_container_small.get_interior_space()
+					if not PhysicsServer3D.space_is_active(container_space):
+						PhysicsServer3D.space_set_active(container_space, true)
+
 					# Set proxy_body's space to container's interior space
-					PhysicsServer3D.body_set_space(character.proxy_body, vehicle_container_small.get_interior_space())
+					PhysicsServer3D.body_set_space(character.proxy_body, container_space)
 
 					character.enter_container()
 					character.set_proxy_position(container_proxy_pos, local_velocity)
@@ -904,6 +937,13 @@ func _check_transitions() -> void:
 						"z": local_pos.z
 					})
 					vehicle.set_docked(false, container)
+
+					# Check if container space can be deactivated (no one left inside after undocking)
+					if not _is_anyone_in_container(container):
+						var container_space = container.get_interior_space()
+						if PhysicsServer3D.space_is_active(container_space):
+							PhysicsServer3D.space_set_active(container_space, false)
+
 					break
 
 	# Check container-in-container docking (small container docking in large container)
@@ -961,4 +1001,37 @@ func _is_player_in_container(container: VehicleContainer) -> bool:
 		if docked_container == container:
 			return true
 
+	return false
+
+func _is_anyone_in_vehicle() -> bool:
+	# Check if any character is in the vehicle
+	if not is_instance_valid(vehicle):
+		return false
+
+	# Check if player is in vehicle
+	if is_instance_valid(character) and character.is_in_vehicle:
+		return true
+
+	# Could check for other NPCs/players here in the future
+	return false
+
+func _is_anyone_in_container(container: VehicleContainer) -> bool:
+	# Check if anyone (player or docked vehicles) is in the container
+	if not is_instance_valid(container):
+		return false
+
+	# Check if player is directly in container
+	if is_instance_valid(character) and character.is_in_container:
+		var container_space = container.get_interior_space()
+		var player_space = PhysicsServer3D.body_get_space(character.proxy_body)
+		if player_space == container_space:
+			return true
+
+	# Check if vehicle is docked in this container
+	if is_instance_valid(vehicle) and vehicle.is_docked:
+		var docked_container = vehicle._get_docked_container()
+		if docked_container == container:
+			return true
+
+	# Could check for other NPCs/players or nested containers here in the future
 	return false

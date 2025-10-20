@@ -37,7 +37,7 @@ func _ready() -> void:
 func _create_container_physics_space() -> void:
 	# Each container has its own interior physics space for recursive nesting
 	container_interior_space = PhysicsServer3D.space_create()
-	PhysicsServer3D.space_set_active(container_interior_space, true)  # Keep always active to avoid initialization issues
+	PhysicsServer3D.space_set_active(container_interior_space, false)  # Start inactive, activate on demand
 
 	# Create gravity for this container's interior
 	var gravity_area = PhysicsServer3D.area_create()

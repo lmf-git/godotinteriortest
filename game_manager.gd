@@ -82,22 +82,22 @@ func _ready() -> void:
 	add_child(character)
 
 	# Create SMALL vehicle container (5x ship = default)
-	# Container floor is at y=-1.4*15.0 = -21.0 relative to center, so y=21.0 puts floor at ground level
+	# Container is 45 units tall (3*3*5), so y=22.5 puts bottom at ground level (like ship)
 	vehicle_container_small = VehicleContainer.new()
 	vehicle_container_small.name = "VehicleContainerSmall"
 	vehicle_container_small.physics_proxy = physics_proxy
 	vehicle_container_small.size_multiplier = 5.0  # 5x ship size (default)
-	vehicle_container_small.position = Vector3(0, 21.0, 350)  # Closer container
+	vehicle_container_small.position = Vector3(0, 22.5, 350)  # Closer container
 	vehicle_container_small.rotation_degrees = Vector3(0, 180, 0)  # Rotate 180° so opening faces player
 	add_child(vehicle_container_small)
 
 	# Create LARGE vehicle container (10x ship = 2x default size)
-	# Container floor is at y=-1.4*30.0 = -42.0 relative to center, so y=42.0 puts floor at ground level
+	# Container is 90 units tall (3*3*10), so y=45.0 puts bottom at ground level (like ship)
 	vehicle_container_large = VehicleContainer.new()
 	vehicle_container_large.name = "VehicleContainerLarge"
 	vehicle_container_large.physics_proxy = physics_proxy
 	vehicle_container_large.size_multiplier = 10.0  # 10x ship size (2x default container)
-	vehicle_container_large.position = Vector3(0, 42.0, 750)  # Further back, larger container
+	vehicle_container_large.position = Vector3(0, 45.0, 750)  # Further back, larger container
 	vehicle_container_large.rotation_degrees = Vector3(0, 180, 0)  # Rotate 180° so opening faces player
 	add_child(vehicle_container_large)
 
@@ -765,34 +765,55 @@ func _check_transitions() -> void:
 					if PhysicsServer3D.space_is_active(vehicle_space):
 						PhysicsServer3D.space_set_active(vehicle_space, false)
 
-				# Check if ship is docked and player exit position is inside container bounds
+				# Check if ship is docked in ANY container and player exit position is inside it
+				# Loop through all containers (universal system)
 				var should_enter_container = false
+				var target_container: VehicleContainer = null
 				var container_transform: Transform3D
 				var container_proxy_pos: Vector3
 
-				if is_instance_valid(vehicle_container_small) and vehicle.is_docked:
-					# Transform world position to container local space
-					container_transform = vehicle_container_small.exterior_body.global_transform
-					var relative_pos = world_pos - container_transform.origin
-					var local_pos = container_transform.basis.inverse() * relative_pos
+				if vehicle.is_docked:
+					var containers = [vehicle_container_small, vehicle_container_large]
 
-					# Container is 5x ship: 90 wide (±45), 45 tall (floor -21 to ceiling +21), 150 long (±75)
-					# Check if exit position is actually INSIDE the container
-					var inside_container = (
-						abs(local_pos.x) < 45.0 and
-						local_pos.y > -21.0 and local_pos.y < 21.0 and
-						local_pos.z > -75.0 and local_pos.z < 75.0
-					)
+					for container in containers:
+						if not is_instance_valid(container) or not container.exterior_body:
+							continue
 
-					should_enter_container = inside_container
-					container_proxy_pos = ship_proxy_pos  # Use ship proxy pos as container proxy pos
+						# Check if ship is docked in THIS container
+						var docked_container = vehicle._get_docked_container()
+						if docked_container != container:
+							continue
 
-				if should_enter_container:
+						# Transform world position to container local space
+						container_transform = container.exterior_body.global_transform
+						var relative_pos = world_pos - container_transform.origin
+						var local_pos = container_transform.basis.inverse() * relative_pos
+
+						# Calculate container bounds dynamically based on size
+						var size_scale = 3.0 * container.size_multiplier
+						var half_width = 3.0 * size_scale
+						var half_height = 1.5 * size_scale
+						var half_length = 5.0 * size_scale
+
+						# Check if exit position is actually INSIDE the container
+						var inside_container = (
+							abs(local_pos.x) < half_width and
+							local_pos.y > -half_height and local_pos.y < half_height and
+							local_pos.z > -half_length and local_pos.z < half_length
+						)
+
+						if inside_container:
+							should_enter_container = true
+							target_container = container
+							container_proxy_pos = ship_proxy_pos  # Use ship proxy pos as container proxy pos
+							break
+
+				if should_enter_container and target_container:
 					# Exit position is inside container - enter container proxy space
 					var local_velocity = container_transform.basis.inverse() * world_velocity
 
 					# Activate container space if needed
-					var container_space = vehicle_container_small.get_interior_space()
+					var container_space = target_container.get_interior_space()
 					if not PhysicsServer3D.space_is_active(container_space):
 						PhysicsServer3D.space_set_active(container_space, true)
 
@@ -812,62 +833,71 @@ func _check_transitions() -> void:
 				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 
 		else:
-			# Character in world space - check if entering station from outside
-			var char_world_pos = character.get_world_position()
-			var container_transform = vehicle_container_small.exterior_body.global_transform
+			# Character in world space - check if entering ANY container from outside
+			# Loop through all containers (same pattern as vehicle docking)
+			var containers = [vehicle_container_small, vehicle_container_large]
 
-			# Get relative position (vector from container to character)
-			var relative_pos = char_world_pos - container_transform.origin
+			for container in containers:
+				if not is_instance_valid(container) or not container.exterior_body:
+					continue
 
-			# Transform relative position to container local space
-			var local_pos = container_transform.basis.inverse() * relative_pos
+				var char_world_pos = character.get_world_position()
+				var container_transform = container.exterior_body.global_transform
 
-			# Container is rotated 180° like the ship, 5x ship size
-			# Container size_scale = 15.0: floor at y=-21.0, entrance at z=+75
-			# Opening dimensions: X: ±45, Y: -21 to +21 (height 42 units)
-			# Ship detection: 14-15 out of 15 (1 unit inside)
-			# Container detection: 73-74 out of 75 (1-2 units inside, proportional)
-			# Slightly offset to prevent too-early detection while keeping it natural
-			var at_container_entrance = (
-				abs(local_pos.x) < 45.0 and
-				local_pos.y > -23.0 and local_pos.y < 23.0 and  # Full opening height
-				local_pos.z > 73.0 and local_pos.z < 74.0  # 1-2 units inside
-			)
+				# Get relative position (vector from container to character)
+				var relative_pos = char_world_pos - container_transform.origin
 
-			# CRITICAL: Only trigger if player is in world space (not in vehicle or container)
-			# When player is inside docked ship, they stay in vehicle interior until they walk out
-			if at_container_entrance and not character.is_in_container and not character.is_in_vehicle:
-				# Adjust camera for 180° container rotation
-				if is_instance_valid(dual_camera):
-					dual_camera.base_rotation.y += PI
+				# Transform relative position to container local space
+				var local_pos = container_transform.basis.inverse() * relative_pos
 
-				# Get current world velocity and transform to container local space
-				var world_velocity = character.get_world_velocity()
-				var local_velocity = container_transform.basis.inverse() * world_velocity
+				# Calculate entrance detection zone based on container size
+				# Ship detection: 14-15 out of 15 (1 unit inside)
+				# Container detection: proportional (1-2 units inside)
+				var size_scale = 3.0 * container.size_multiplier
+				var half_width = 3.0 * size_scale  # Width is 6 * size_scale
+				var half_height = 1.5 * size_scale  # Height is 3 * size_scale
+				var half_length = 5.0 * size_scale  # Length is 10 * size_scale
 
-				# Activate container space if needed
-				var container_space = vehicle_container_small.get_interior_space()
-				if not PhysicsServer3D.space_is_active(container_space):
-					PhysicsServer3D.space_set_active(container_space, true)
-
-				# Set proxy_body's space to container's interior space
-				PhysicsServer3D.body_set_space(character.proxy_body, container_space)
-
-				# Seamlessly enter - use exact transformed position with safety Y minimum
-				# Prevent falling through floor while keeping seamless horizontal transition
-				var size_scale = 3.0 * vehicle_container_small.size_multiplier
-				var container_floor_y = -1.4 * size_scale  # -21.0 for small container
-				var player_min_y = container_floor_y + 0.7  # Player capsule center minimum (on floor)
-
-				var safe_pos = Vector3(
-					local_pos.x,
-					max(local_pos.y, player_min_y),  # Only clamp if below floor
-					local_pos.z
+				var at_container_entrance = (
+					abs(local_pos.x) < half_width and
+					local_pos.y > -(half_height + 1.0) and local_pos.y < (half_height + 1.0) and
+					local_pos.z > (half_length - 2.0) and local_pos.z < (half_length - 1.0)  # 1-2 units inside
 				)
 
-				character.enter_container()
-				character.set_proxy_position(safe_pos, local_velocity)
-				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
+				# CRITICAL: Only trigger if player is in world space (not in vehicle or container)
+				# When player is inside docked ship, they stay in vehicle interior until they walk out
+				if at_container_entrance and not character.is_in_container and not character.is_in_vehicle:
+					# Adjust camera for 180° container rotation
+					if is_instance_valid(dual_camera):
+						dual_camera.base_rotation.y += PI
+
+					# Get current world velocity and transform to container local space
+					var world_velocity = character.get_world_velocity()
+					var local_velocity = container_transform.basis.inverse() * world_velocity
+
+					# Activate container space if needed
+					var container_space = container.get_interior_space()
+					if not PhysicsServer3D.space_is_active(container_space):
+						PhysicsServer3D.space_set_active(container_space, true)
+
+					# Set proxy_body's space to container's interior space
+					PhysicsServer3D.body_set_space(character.proxy_body, container_space)
+
+					# Seamlessly enter - use exact transformed position with safety Y minimum
+					# Prevent falling through floor while keeping seamless horizontal transition
+					var container_floor_y = -1.5 * size_scale + 0.1  # Floor flush with walls
+					var player_min_y = container_floor_y + 0.7  # Player capsule center minimum (on floor)
+
+					var safe_pos = Vector3(
+						local_pos.x,
+						max(local_pos.y, player_min_y),  # Only clamp if below floor
+						local_pos.z
+					)
+
+					character.enter_container()
+					character.set_proxy_position(safe_pos, local_velocity)
+					container_transition_cooldown = TRANSITION_COOLDOWN_TIME
+					break  # Only enter one container at a time
 
 	# Check vehicle docking in BOTH containers - find which one ship is inside
 	if is_instance_valid(vehicle) and vehicle.exterior_body:

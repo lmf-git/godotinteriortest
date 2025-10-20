@@ -42,12 +42,12 @@ func _create_vehicle_exterior() -> void:
 	# Scale up by 3x (even bigger)
 	var size_scale = 3.0
 
-	# Floor
+	# Floor (flush with bottom of walls)
 	var floor_mesh := MeshInstance3D.new()
 	floor_mesh.mesh = BoxMesh.new()
 	floor_mesh.mesh.size = Vector3(6 * size_scale, 0.2, 10 * size_scale)
 	floor_mesh.material_override = exterior_material
-	floor_mesh.position = Vector3(0, -1.4 * size_scale, 0)
+	floor_mesh.position = Vector3(0, -1.5 * size_scale + 0.1, 0)  # -1.5 * scale + half thickness
 	floor_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	exterior_body.add_child(floor_mesh)
 
@@ -78,21 +78,21 @@ func _create_vehicle_exterior() -> void:
 	# Front wall - OPENING (completely open entrance, no obstruction)
 	# No front wall mesh or collision - fully open for entry/exit
 
-	# Ceiling
+	# Ceiling (flush with top of walls)
 	var ceiling := MeshInstance3D.new()
 	ceiling.mesh = BoxMesh.new()
 	ceiling.mesh.size = Vector3(6 * size_scale, 0.2, 10 * size_scale)
 	ceiling.material_override = exterior_material
-	ceiling.position = Vector3(0, 1.4 * size_scale, 0)
+	ceiling.position = Vector3(0, 1.5 * size_scale - 0.1, 0)  # 1.5 * scale - half thickness
 	exterior_body.add_child(ceiling)
 
 	# Collision shapes for exterior - match the actual wall geometry
-	# Floor collision
+	# Floor collision (flush with bottom of walls)
 	var floor_collision := CollisionShape3D.new()
 	var floor_shape := BoxShape3D.new()
 	floor_shape.size = Vector3(6 * size_scale, 0.2, 10 * size_scale)
 	floor_collision.shape = floor_shape
-	floor_collision.position = Vector3(0, -1.4 * size_scale, 0)
+	floor_collision.position = Vector3(0, -1.5 * size_scale + 0.1, 0)
 	exterior_body.add_child(floor_collision)
 
 	# Left wall collision
@@ -121,12 +121,12 @@ func _create_vehicle_exterior() -> void:
 
 	# No front collision - fully open entrance
 
-	# Ceiling collision
+	# Ceiling collision (flush with top of walls)
 	var ceiling_collision := CollisionShape3D.new()
 	var ceiling_shape := BoxShape3D.new()
 	ceiling_shape.size = Vector3(6 * size_scale, 0.2, 10 * size_scale)
 	ceiling_collision.shape = ceiling_shape
-	ceiling_collision.position = Vector3(0, 1.4 * size_scale, 0)
+	ceiling_collision.position = Vector3(0, 1.5 * size_scale - 0.1, 0)
 	exterior_body.add_child(ceiling_collision)
 
 	# Configure rigid body
@@ -230,7 +230,7 @@ func _create_proxy_interior_colliders() -> void:
 
 	var size_scale = 3.0
 
-	# Floor collider - Relative coordinates in vehicle's own space
+	# Floor collider - Relative coordinates in vehicle's own space (flush with walls)
 	# Width: 3.0 * size_scale (9 units) matches exterior walls at ±9
 	# Length: 5.0 * size_scale (15 units) matches exterior 15 units
 	var floor_shape := PhysicsServer3D.box_shape_create()
@@ -240,7 +240,7 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(floor_body, vehicle_interior_space)  # Vehicle's own space!
 	PhysicsServer3D.body_add_shape(floor_body, floor_shape)
-	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.4 * size_scale, 0)))
+	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.5 * size_scale + 0.05, 0)))
 	# Enable collision with players
 	PhysicsServer3D.body_set_collision_layer(floor_body, 1)
 	PhysicsServer3D.body_set_collision_mask(floor_body, 1)
@@ -288,7 +288,7 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.body_set_collision_mask(back_wall_body, 1)
 	interior_proxy_colliders.append(back_wall_body)
 
-	# Ceiling collider - matches floor dimensions
+	# Ceiling collider - flush with top of walls
 	var ceiling_shape := PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
 
@@ -296,7 +296,7 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.body_set_mode(ceiling_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(ceiling_body, vehicle_interior_space)  # Vehicle's own space!
 	PhysicsServer3D.body_add_shape(ceiling_body, ceiling_shape)
-	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.4 * size_scale, 0)))
+	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.5 * size_scale - 0.05, 0)))
 	# Enable collision with players
 	PhysicsServer3D.body_set_collision_layer(ceiling_body, 1)
 	PhysicsServer3D.body_set_collision_mask(ceiling_body, 1)
@@ -358,12 +358,12 @@ func _create_vehicle_dock_proxy() -> void:
 	PhysicsServer3D.body_set_mode(dock_proxy_body, PhysicsServer3D.BODY_MODE_RIGID)
 	PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3.ZERO))
 
-	# Create separate collision shapes matching exterior_body geometry
+	# Create separate collision shapes matching exterior_body geometry (flush with walls)
 	# Floor
 	var floor_shape = PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
 	PhysicsServer3D.body_add_shape(dock_proxy_body, floor_shape)
-	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 0, Transform3D(Basis(), Vector3(0, -1.4 * size_scale, 0)))
+	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 0, Transform3D(Basis(), Vector3(0, -1.5 * size_scale + 0.1, 0)))
 
 	# Left wall
 	var left_wall_shape = PhysicsServer3D.box_shape_create()
@@ -387,7 +387,7 @@ func _create_vehicle_dock_proxy() -> void:
 	var ceiling_shape = PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
 	PhysicsServer3D.body_add_shape(dock_proxy_body, ceiling_shape)
-	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 4, Transform3D(Basis(), Vector3(0, 1.4 * size_scale, 0)))
+	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 4, Transform3D(Basis(), Vector3(0, 1.5 * size_scale - 0.1, 0)))
 
 	# NO FRONT WALL - this is the opening where player can enter
 
@@ -397,8 +397,8 @@ func _create_vehicle_dock_proxy() -> void:
 
 	# Physics parameters for docked ship
 	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_GRAVITY_SCALE, 1.0)  # Normal gravity
-	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_LINEAR_DAMP, 2.0)  # Higher damping when docked to settle faster
-	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_ANGULAR_DAMP, 2.0)  # Higher damping for rotation to settle faster
+	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_LINEAR_DAMP, 0.1)  # Minimal damping - same as free flight
+	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_ANGULAR_DAMP, 0.1)  # Minimal damping for rotation
 	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_MASS, 1000.0)  # Same as exterior_body
 	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_BOUNCE, 0.0)  # No bounce
 	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_FRICTION, 1.0)  # Maximum friction to prevent sliding

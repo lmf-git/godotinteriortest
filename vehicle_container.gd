@@ -115,19 +115,19 @@ func _create_container_exterior() -> void:
 	# Container dimensions: size_multiplier * ship size
 	var size_scale = 3.0 * size_multiplier
 
-	# Floor (same proportions as ship)
+	# Floor (flush with bottom of walls)
 	var floor_mesh := MeshInstance3D.new()
 	floor_mesh.mesh = BoxMesh.new()
 	floor_mesh.mesh.size = Vector3(6 * size_scale, 0.2, 10 * size_scale)
 	floor_mesh.material_override = material
-	floor_mesh.position = Vector3(0, -1.4 * size_scale, 0)
+	floor_mesh.position = Vector3(0, -1.5 * size_scale + 0.1, 0)  # -1.5 * scale + half thickness
 	floor_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	exterior_body.add_child(floor_mesh)
 
 	var floor_collision := CollisionShape3D.new()
 	floor_collision.shape = BoxShape3D.new()
 	floor_collision.shape.size = Vector3(6 * size_scale, 0.2, 10 * size_scale)
-	floor_collision.position = Vector3(0, -1.4 * size_scale, 0)
+	floor_collision.position = Vector3(0, -1.5 * size_scale + 0.1, 0)
 	exterior_body.add_child(floor_collision)
 
 	# Left wall (same proportions as ship)
@@ -175,18 +175,18 @@ func _create_container_exterior() -> void:
 	# Front wall - OPENING (completely open entrance, no obstruction)
 	# No front wall mesh or collision - fully open for entry/exit
 
-	# Ceiling (same proportions as ship)
+	# Ceiling (flush with top of walls)
 	var ceiling := MeshInstance3D.new()
 	ceiling.mesh = BoxMesh.new()
 	ceiling.mesh.size = Vector3(6 * size_scale, 0.2, 10 * size_scale)
 	ceiling.material_override = material
-	ceiling.position = Vector3(0, 1.4 * size_scale, 0)
+	ceiling.position = Vector3(0, 1.5 * size_scale - 0.1, 0)  # 1.5 * scale - half thickness
 	exterior_body.add_child(ceiling)
 
 	var ceiling_collision := CollisionShape3D.new()
 	ceiling_collision.shape = BoxShape3D.new()
 	ceiling_collision.shape.size = Vector3(6 * size_scale, 0.2, 10 * size_scale)
-	ceiling_collision.position = Vector3(0, 1.4 * size_scale, 0)
+	ceiling_collision.position = Vector3(0, 1.5 * size_scale - 0.1, 0)
 	exterior_body.add_child(ceiling_collision)
 
 func _create_container_proxy_interior() -> void:
@@ -200,7 +200,7 @@ func _create_container_proxy_interior() -> void:
 
 	var size_scale = 3.0 * size_multiplier
 
-	# Floor collider - at different Y than ship!
+	# Floor collider - flush with bottom of walls
 	var floor_shape := PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
 
@@ -208,8 +208,8 @@ func _create_container_proxy_interior() -> void:
 	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(floor_body, container_interior_space)  # Use container's own space
 	PhysicsServer3D.body_add_shape(floor_body, floor_shape)
-	# Floor at Y=0 in container's own coordinate system (not offset like before)
-	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.4 * size_scale, 0)))
+	# Floor flush with bottom of walls in container's own coordinate system
+	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.5 * size_scale + 0.05, 0)))
 	# Enable collision with docked ships and players
 	PhysicsServer3D.body_set_collision_layer(floor_body, 1)
 	PhysicsServer3D.body_set_collision_mask(floor_body, 1)
@@ -257,7 +257,7 @@ func _create_container_proxy_interior() -> void:
 	PhysicsServer3D.body_set_collision_mask(back_wall_body, 1)
 	interior_proxy_colliders.append(back_wall_body)
 
-	# Ceiling - at station proxy Y offset + ceiling height
+	# Ceiling - flush with top of walls
 	var ceiling_shape := PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
 
@@ -265,7 +265,7 @@ func _create_container_proxy_interior() -> void:
 	PhysicsServer3D.body_set_mode(ceiling_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(ceiling_body, container_interior_space)
 	PhysicsServer3D.body_add_shape(ceiling_body, ceiling_shape)
-	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.4 * size_scale, 0)))
+	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.5 * size_scale - 0.05, 0)))
 	# Enable collision with docked ships and players
 	PhysicsServer3D.body_set_collision_layer(ceiling_body, 1)
 	PhysicsServer3D.body_set_collision_mask(ceiling_body, 1)

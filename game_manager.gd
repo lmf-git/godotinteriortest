@@ -24,6 +24,10 @@ var fps_counter: float = 0.0
 var fps_update_timer: float = 0.0
 const FPS_UPDATE_INTERVAL: float = 0.25  # Update FPS display 4 times per second
 
+# Physics space sleep optimization
+var space_sleep_check_timer: float = 0.0
+const SPACE_SLEEP_CHECK_INTERVAL: float = 1.0  # Check every second if spaces can sleep
+
 func _debounced_log(category: String, message: String, data: Dictionary) -> void:
 	# Only log if different data or enough time has passed
 	var current_time = Time.get_ticks_msec() / 1000.0
@@ -273,6 +277,13 @@ func _process(delta: float) -> void:
 	_update_debug_ui()
 	_handle_input()
 	_check_transitions()
+
+func _physics_process(delta: float) -> void:
+	# Periodically check if physics spaces can be put to sleep for optimization
+	space_sleep_check_timer += delta
+	if space_sleep_check_timer >= SPACE_SLEEP_CHECK_INTERVAL:
+		space_sleep_check_timer = 0.0
+		_check_space_sleep_optimization()
 
 func _update_debug_ui() -> void:
 	# Update debug label on screen
@@ -662,10 +673,6 @@ func _check_transitions() -> void:
 			var exited_container = proxy_pos.z > 75.0
 
 			if exited_container:
-				# Adjust camera for 180° container rotation - subtract PI from yaw
-				if is_instance_valid(dual_camera):
-					dual_camera.base_rotation.y -= PI
-
 				# Get current proxy velocity and transform to world space
 				var proxy_velocity = character.get_proxy_velocity()
 				var container_transform = vehicle_container_small.exterior_body.global_transform
@@ -706,10 +713,17 @@ func _check_transitions() -> void:
 						character.enter_vehicle()
 						character.set_proxy_position(vehicle_local_pos, vehicle_local_velocity)
 					else:
+						# NO camera adjustment - staying in proxy space (container -> vehicle)
 						# Too far from ship - go to world space
+						# Adjust camera for 180° container rotation - subtract PI from yaw
+						if is_instance_valid(dual_camera):
+							dual_camera.base_rotation.y -= PI
 						character.set_world_position(world_pos, world_velocity)
 				else:
 					# No docked ship - go to world space
+					# Adjust camera for 180° container rotation - subtract PI from yaw
+					if is_instance_valid(dual_camera):
+						dual_camera.base_rotation.y -= PI
 					character.set_world_position(world_pos, world_velocity)
 
 				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
@@ -811,13 +825,13 @@ func _check_transitions() -> void:
 			# Container is rotated 180° like the ship, 5x ship size
 			# Container size_scale = 15.0: floor at y=-21.0, entrance at z=+75
 			# Opening dimensions: X: ±45, Y: -21 to +21 (height 42 units)
-			# Ship Y range: abs(y) < 4.5 (±4.5 from center, 9 units total)
-			# Container Y range: ±22.5 from center (45 units total, proportional to ship)
-			# Allow detection from ground level (y≈-22) to ceiling
+			# Ship detection: 14-15 out of 15 (1 unit inside)
+			# Container detection: 73-74 out of 75 (1-2 units inside, proportional)
+			# Slightly offset to prevent too-early detection while keeping it natural
 			var at_container_entrance = (
 				abs(local_pos.x) < 45.0 and
 				local_pos.y > -23.0 and local_pos.y < 23.0 and  # Full opening height
-				local_pos.z > 74.0 and local_pos.z < 75.0
+				local_pos.z > 73.0 and local_pos.z < 74.0  # 1-2 units inside
 			)
 
 			# CRITICAL: Only trigger if player is in world space (not in vehicle or container)
@@ -831,27 +845,28 @@ func _check_transitions() -> void:
 				var world_velocity = character.get_world_velocity()
 				var local_velocity = container_transform.basis.inverse() * world_velocity
 
-				# With recursive nesting, local_pos is already in container's coordinate system
-				# Container's interior space uses the same coordinate system as the exterior
-				# CRITICAL: Ensure player is placed AT floor level, not below it
-				# Container floor is at y=-21.0, player capsule height is 1.4, so center should be at y=-20.3
-				var size_scale = 3.0 * vehicle_container_small.size_multiplier
-				var container_floor_y = -1.4 * size_scale  # -21.0
-				var player_center_y = container_floor_y + 0.7  # Player capsule center at floor level
+				# Activate container space if needed
+				var container_space = vehicle_container_small.get_interior_space()
+				if not PhysicsServer3D.space_is_active(container_space):
+					PhysicsServer3D.space_set_active(container_space, true)
 
-				var proxy_pos = Vector3(
+				# Set proxy_body's space to container's interior space
+				PhysicsServer3D.body_set_space(character.proxy_body, container_space)
+
+				# Seamlessly enter - use exact transformed position with safety Y minimum
+				# Prevent falling through floor while keeping seamless horizontal transition
+				var size_scale = 3.0 * vehicle_container_small.size_multiplier
+				var container_floor_y = -1.4 * size_scale  # -21.0 for small container
+				var player_min_y = container_floor_y + 0.7  # Player capsule center minimum (on floor)
+
+				var safe_pos = Vector3(
 					local_pos.x,
-					max(local_pos.y, player_center_y),  # Don't spawn below floor
+					max(local_pos.y, player_min_y),  # Only clamp if below floor
 					local_pos.z
 				)
 
-				# Set proxy_body's space to container's interior space
-				PhysicsServer3D.body_set_space(character.proxy_body, vehicle_container_small.get_interior_space())
-
-
-				# Seamlessly enter - use transformed position
 				character.enter_container()
-				character.set_proxy_position(proxy_pos, local_velocity)
+				character.set_proxy_position(safe_pos, local_velocity)
 				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 
 	# Check vehicle docking in BOTH containers - find which one ship is inside
@@ -979,7 +994,92 @@ func _check_transitions() -> void:
 			# Small container leaving large container dock (requires moving further out)
 			vehicle_container_small.set_docked(false, vehicle_container_large)
 
-# Space activation/deactivation functions removed - spaces are now always active to avoid initialization issues
+# Physics space optimization: spaces activate on-demand and deactivate when empty or all bodies are sleeping
+
+func _check_space_sleep_optimization() -> void:
+	# Check if physics spaces can be deactivated due to inactivity (sleeping bodies)
+	# This runs periodically to optimize performance
+
+	var deactivated_any = false
+
+	# Check vehicle space
+	if is_instance_valid(vehicle) and vehicle.vehicle_interior_space.is_valid():
+		var vehicle_space = vehicle.vehicle_interior_space
+		if PhysicsServer3D.space_is_active(vehicle_space):
+			# Only consider sleeping if no player is inside
+			if not _is_anyone_in_vehicle():
+				# Check both docked and free-flying cases
+				var is_sleeping = false
+
+				if vehicle.is_docked and vehicle.dock_proxy_body.is_valid():
+					# Vehicle is docked - check dock_proxy_body velocity
+					var vel = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
+					var angvel = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
+					is_sleeping = vel.length() < 0.01 and angvel.length() < 0.01
+				elif vehicle.exterior_body:
+					# Vehicle is free-flying - check exterior_body velocity
+					var vel = vehicle.exterior_body.linear_velocity
+					var angvel = vehicle.exterior_body.angular_velocity
+					is_sleeping = vel.length() < 0.01 and angvel.length() < 0.01
+
+				if is_sleeping:
+					PhysicsServer3D.space_set_active(vehicle_space, false)
+					print("[SLEEP OPT] Deactivated vehicle space (sleeping)")
+					deactivated_any = true
+
+	# Check small container space
+	if is_instance_valid(vehicle_container_small) and vehicle_container_small.container_interior_space.is_valid():
+		var container_space = vehicle_container_small.container_interior_space
+		if PhysicsServer3D.space_is_active(container_space):
+			# Only consider sleeping if no player is inside
+			if not _is_anyone_in_container(vehicle_container_small):
+				# Check if all docked vehicles are sleeping
+				var all_sleeping = true
+
+				# Check if vehicle is docked in this container
+				if is_instance_valid(vehicle) and vehicle.is_docked:
+					var docked_container = vehicle._get_docked_container()
+					if docked_container == vehicle_container_small and vehicle.dock_proxy_body.is_valid():
+						var vel = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
+						var angvel = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
+						if vel.length() >= 0.01 or angvel.length() >= 0.01:
+							all_sleeping = false
+
+				if all_sleeping:
+					PhysicsServer3D.space_set_active(container_space, false)
+					print("[SLEEP OPT] Deactivated small container space (sleeping)")
+					deactivated_any = true
+
+	# Check large container space
+	if is_instance_valid(vehicle_container_large) and vehicle_container_large.container_interior_space.is_valid():
+		var container_space = vehicle_container_large.container_interior_space
+		if PhysicsServer3D.space_is_active(container_space):
+			# Only consider sleeping if no player is inside
+			if not _is_anyone_in_container(vehicle_container_large):
+				# Check if all docked vehicles/containers are sleeping
+				var all_sleeping = true
+
+				# Check if vehicle is docked in this container
+				if is_instance_valid(vehicle) and vehicle.is_docked:
+					var docked_container = vehicle._get_docked_container()
+					if docked_container == vehicle_container_large and vehicle.dock_proxy_body.is_valid():
+						var vel = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
+						var angvel = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
+						if vel.length() >= 0.01 or angvel.length() >= 0.01:
+							all_sleeping = false
+
+				# Check if small container is docked in large container
+				if is_instance_valid(vehicle_container_small) and vehicle_container_small.is_docked:
+					if vehicle_container_small.dock_proxy_body.is_valid():
+						var vel = PhysicsServer3D.body_get_state(vehicle_container_small.dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
+						var angvel = PhysicsServer3D.body_get_state(vehicle_container_small.dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
+						if vel.length() >= 0.01 or angvel.length() >= 0.01:
+							all_sleeping = false
+
+				if all_sleeping:
+					PhysicsServer3D.space_set_active(container_space, false)
+					print("[SLEEP OPT] Deactivated large container space (sleeping)")
+					deactivated_any = true
 
 func _is_player_in_container(container: VehicleContainer) -> bool:
 	# Check if player is in this specific container

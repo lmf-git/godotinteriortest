@@ -231,16 +231,17 @@ func _create_proxy_interior_colliders() -> void:
 	var size_scale = 3.0
 
 	# Floor collider - Relative coordinates in vehicle's own space (flush with walls)
-	# Width: 3.0 * size_scale (9 units) matches exterior walls at ±9
-	# Length: 5.0 * size_scale (15 units) matches exterior 15 units
+	# MUST MATCH exterior floor position for consistent player representation
+	# Exterior floor: 0.2 thickness at y = -1.5*scale + 0.1
+	# Interior proxy: 0.2 thickness (half-extents 0.1) at y = -1.5*scale + 0.1
 	var floor_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
+	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
 
 	var floor_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(floor_body, vehicle_interior_space)  # Vehicle's own space!
 	PhysicsServer3D.body_add_shape(floor_body, floor_shape)
-	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.5 * size_scale + 0.05, 0)))
+	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.5 * size_scale + 0.1, 0)))
 	# Enable collision with players
 	PhysicsServer3D.body_set_collision_layer(floor_body, 1)
 	PhysicsServer3D.body_set_collision_mask(floor_body, 1)
@@ -289,14 +290,17 @@ func _create_proxy_interior_colliders() -> void:
 	interior_proxy_colliders.append(back_wall_body)
 
 	# Ceiling collider - flush with top of walls
+	# MUST MATCH exterior ceiling position for consistent player representation
+	# Exterior ceiling: 0.2 thickness at y = 1.5*scale - 0.1
+	# Interior proxy: 0.2 thickness (half-extents 0.1) at y = 1.5*scale - 0.1
 	var ceiling_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
+	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
 
 	var ceiling_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(ceiling_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(ceiling_body, vehicle_interior_space)  # Vehicle's own space!
 	PhysicsServer3D.body_add_shape(ceiling_body, ceiling_shape)
-	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.5 * size_scale - 0.05, 0)))
+	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.5 * size_scale - 0.1, 0)))
 	# Enable collision with players
 	PhysicsServer3D.body_set_collision_layer(ceiling_body, 1)
 	PhysicsServer3D.body_set_collision_mask(ceiling_body, 1)
@@ -314,18 +318,18 @@ func _update_interior_colliders_position(dock_transform: Transform3D) -> void:
 	var size_scale = 3.0
 
 	# The interior colliders were created with these RELATIVE positions:
-	# Floor: (0, -1.4 * size_scale, 0)
+	# Floor: (0, -1.5*scale + 0.1, 0) - matches exterior
 	# Left wall: (-3.0 * size_scale, 0, 0)
 	# Right wall: (3.0 * size_scale, 0, 0)
 	# Back wall: (0, 0, -5.0 * size_scale)
-	# Ceiling: (0, 1.4 * size_scale, 0)
+	# Ceiling: (0, 1.5*scale - 0.1, 0) - matches exterior
 
 	var relative_positions = [
-		Vector3(0, -1.4 * size_scale, 0),  # Floor
+		Vector3(0, -1.5 * size_scale + 0.1, 0),  # Floor
 		Vector3(-3.0 * size_scale, 0, 0),   # Left wall
 		Vector3(3.0 * size_scale, 0, 0),    # Right wall
 		Vector3(0, 0, -5.0 * size_scale),   # Back wall
-		Vector3(0, 1.4 * size_scale, 0)     # Ceiling
+		Vector3(0, 1.5 * size_scale - 0.1, 0)     # Ceiling
 	]
 
 	# Update each collider's position to be relative to dock_proxy_body
@@ -358,32 +362,35 @@ func _create_vehicle_dock_proxy() -> void:
 	PhysicsServer3D.body_set_mode(dock_proxy_body, PhysicsServer3D.BODY_MODE_RIGID)
 	PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3.ZERO))
 
-	# Create separate collision shapes matching exterior_body geometry (flush with walls)
-	# Floor
+	# Create collision shapes matching exterior, but floor slightly thicker underneath to prevent clipping
+	# PhysicsServer3D uses half-extents, so divide exterior sizes by 2
+	# Floor - thicker than exterior to prevent clipping through container floor
+	# Container interior floor top is at -1.5*scale + 0.05
+	# Ship floor extends from -1.5*scale - 0.05 (bottom) to -1.5*scale + 0.25 (top) = 0.3 total thickness
 	var floor_shape = PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
+	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.15, 5.0 * size_scale))
 	PhysicsServer3D.body_add_shape(dock_proxy_body, floor_shape)
 	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 0, Transform3D(Basis(), Vector3(0, -1.5 * size_scale + 0.1, 0)))
 
-	# Left wall
+	# Left wall - matches exterior: size (0.2, 3*scale, 10*scale) -> half-extents (0.1, 1.5*scale, 5*scale)
 	var left_wall_shape = PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.1, 1.5 * size_scale, 5.0 * size_scale))
 	PhysicsServer3D.body_add_shape(dock_proxy_body, left_wall_shape)
 	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 1, Transform3D(Basis(), Vector3(-3.0 * size_scale, 0, 0)))
 
-	# Right wall
+	# Right wall - matches exterior: size (0.2, 3*scale, 10*scale) -> half-extents (0.1, 1.5*scale, 5*scale)
 	var right_wall_shape = PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.1, 1.5 * size_scale, 5.0 * size_scale))
 	PhysicsServer3D.body_add_shape(dock_proxy_body, right_wall_shape)
 	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 2, Transform3D(Basis(), Vector3(3.0 * size_scale, 0, 0)))
 
-	# Back wall (closed)
+	# Back wall - matches exterior: size (6*scale, 3*scale, 0.2) -> half-extents (3*scale, 1.5*scale, 0.1)
 	var back_wall_shape = PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(3.0 * size_scale, 1.5 * size_scale, 0.1))
 	PhysicsServer3D.body_add_shape(dock_proxy_body, back_wall_shape)
 	PhysicsServer3D.body_set_shape_transform(dock_proxy_body, 3, Transform3D(Basis(), Vector3(0, 0, -5.0 * size_scale)))
 
-	# Ceiling
+	# Ceiling - matches exterior: size (6*scale, 0.2, 10*scale) -> half-extents (3*scale, 0.1, 5*scale)
 	var ceiling_shape = PhysicsServer3D.box_shape_create()
 	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
 	PhysicsServer3D.body_add_shape(dock_proxy_body, ceiling_shape)
@@ -461,11 +468,11 @@ func _refresh_interior_colliders_at_origin() -> void:
 	var size_scale = 3.0
 
 	var collider_positions = [
-		Vector3(0, -1.4 * size_scale, 0),  # Floor
+		Vector3(0, -1.5 * size_scale + 0.1, 0),  # Floor - matches exterior
 		Vector3(-3.0 * size_scale, 0, 0),   # Left wall
 		Vector3(3.0 * size_scale, 0, 0),    # Right wall
 		Vector3(0, 0, -5.0 * size_scale),   # Back wall
-		Vector3(0, 1.4 * size_scale, 0)     # Ceiling
+		Vector3(0, 1.5 * size_scale - 0.1, 0)     # Ceiling - matches exterior
 	]
 
 	for i in range(min(interior_proxy_colliders.size(), collider_positions.size())):

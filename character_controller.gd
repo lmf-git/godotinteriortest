@@ -171,13 +171,18 @@ func _update_character_visual_position() -> void:
 		var proxy_transform: Transform3D = PhysicsServer3D.body_get_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		var proxy_pos = proxy_transform.origin
 
-		# Find container through parent tree
+		# Find the SPECIFIC container that the player is in by checking physics spaces
+		var player_space = PhysicsServer3D.body_get_space(proxy_body)
 		var game_manager = get_parent()
+		var found_container = false
 		if game_manager:
 			for child in game_manager.get_children():
 				if child is VehicleContainer:
 					var container = child
-					if container.exterior_body:
+					var container_space = container.get_interior_space()
+					# Check if this is the container the player is actually in
+					if container_space == player_space and container.exterior_body:
+						found_container = true
 						var container_transform = container.exterior_body.global_transform
 						var container_basis = container_transform.basis
 
@@ -186,7 +191,14 @@ func _update_character_visual_position() -> void:
 						var world_pos = container_transform.origin + container_basis * proxy_pos
 						character_visual.global_position = world_pos
 						character_visual.global_transform.basis = container_basis
-					break
+
+						# Debug: Print which container we're using for visual
+						if Engine.get_frames_drawn() % 60 == 0:  # Every 60 frames
+							print("[CHAR VISUAL] In container: ", container.name, " proxy_pos: ", proxy_pos, " world_pos: ", world_pos)
+						break
+
+		if not found_container and Engine.get_frames_drawn() % 60 == 0:
+			print("[CHAR VISUAL] ERROR: In container but no matching container found!")
 	elif is_in_vehicle and proxy_body.is_valid():
 		# Character in vehicle interior - position relative to vehicle
 		var proxy_transform: Transform3D = PhysicsServer3D.body_get_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
@@ -198,7 +210,27 @@ func _update_character_visual_position() -> void:
 			for child in game_manager.get_children():
 				if child is Vehicle:
 					var vehicle = child
-					if vehicle.exterior_body:
+
+					# CRITICAL: If vehicle is docked, need to use dock_proxy position + container transform
+					if vehicle.is_docked and vehicle.dock_proxy_body.is_valid():
+						# Get ship's dock_proxy position in container space
+						var ship_dock_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+
+						# Transform player proxy_pos (in ship interior space) to container space
+						var container_proxy_pos = ship_dock_transform.origin + ship_dock_transform.basis * proxy_pos
+
+						# Find which container the ship is docked in
+						var docked_container = vehicle._get_docked_container()
+						if docked_container and docked_container.exterior_body:
+							var container_transform = docked_container.exterior_body.global_transform
+							var container_basis = container_transform.basis
+
+							# Transform to world space
+							var world_pos = container_transform.origin + container_basis * container_proxy_pos
+							character_visual.global_position = world_pos
+							character_visual.global_transform.basis = container_basis
+					elif vehicle.exterior_body:
+						# Vehicle not docked - use exterior body transform
 						var vehicle_transform = vehicle.exterior_body.global_transform
 						var vehicle_basis = vehicle_transform.basis
 

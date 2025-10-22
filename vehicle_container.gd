@@ -97,10 +97,10 @@ func _create_container_exterior() -> void:
 	# Create container as SCALED UP VERSION OF SHIP (exactly like ship but bigger)
 	exterior_body = RigidBody3D.new()
 	exterior_body.name = "ExteriorBody"
-	exterior_body.mass = 500000.0 * size_multiplier  # Very heavy - 500x ship mass (1000 kg)
+	exterior_body.mass = 50000.0 * size_multiplier  # Heavy but controllable - 50x ship mass (1000 kg)
 	exterior_body.gravity_scale = 1.0  # Enable gravity so it sits on ground
-	exterior_body.linear_damp = 10.0  # Very heavy damping - it's a massive station
-	exterior_body.angular_damp = 10.0
+	exterior_body.linear_damp = 0.5  # Low damping for responsive controls
+	exterior_body.angular_damp = 0.5
 	add_child(exterior_body)
 
 	var material := StandardMaterial3D.new()
@@ -200,16 +200,18 @@ func _create_container_proxy_interior() -> void:
 
 	var size_scale = 3.0 * size_multiplier
 
-	# Floor collider - flush with bottom of walls
+	# Floor collider - flush with bottom of walls, matching exterior
+	# Exterior floor: size (6*scale, 0.2, 10*scale) at position (0, -1.5*scale + 0.1, 0)
+	# Interior proxy: half-extents (3*scale, 0.1, 5*scale) at position (0, -1.5*scale + 0.1, 0)
 	var floor_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
+	PhysicsServer3D.shape_set_data(floor_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
 
 	var floor_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(floor_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(floor_body, container_interior_space)  # Use container's own space
 	PhysicsServer3D.body_add_shape(floor_body, floor_shape)
-	# Floor flush with bottom of walls in container's own coordinate system
-	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.5 * size_scale + 0.05, 0)))
+	# Floor flush with bottom of walls in container's own coordinate system - matches exterior exactly
+	PhysicsServer3D.body_set_state(floor_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, -1.5 * size_scale + 0.1, 0)))
 	# Enable collision with docked ships and players
 	PhysicsServer3D.body_set_collision_layer(floor_body, 1)
 	PhysicsServer3D.body_set_collision_mask(floor_body, 1)
@@ -257,15 +259,17 @@ func _create_container_proxy_interior() -> void:
 	PhysicsServer3D.body_set_collision_mask(back_wall_body, 1)
 	interior_proxy_colliders.append(back_wall_body)
 
-	# Ceiling - flush with top of walls
+	# Ceiling - flush with top of walls, matching exterior
+	# Exterior ceiling: size (6*scale, 0.2, 10*scale) at position (0, 1.5*scale - 0.1, 0)
+	# Interior proxy: half-extents (3*scale, 0.1, 5*scale) at position (0, 1.5*scale - 0.1, 0)
 	var ceiling_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.05, 5.0 * size_scale))
+	PhysicsServer3D.shape_set_data(ceiling_shape, Vector3(3.0 * size_scale, 0.1, 5.0 * size_scale))
 
 	var ceiling_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(ceiling_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(ceiling_body, container_interior_space)
 	PhysicsServer3D.body_add_shape(ceiling_body, ceiling_shape)
-	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.5 * size_scale - 0.05, 0)))
+	PhysicsServer3D.body_set_state(ceiling_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3(0, 1.5 * size_scale - 0.1, 0)))
 	# Enable collision with docked ships and players
 	PhysicsServer3D.body_set_collision_layer(ceiling_body, 1)
 	PhysicsServer3D.body_set_collision_mask(ceiling_body, 1)

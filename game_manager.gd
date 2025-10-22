@@ -613,19 +613,14 @@ func _check_transitions() -> void:
 
 				if at_docked_ship_entrance:
 					# Player entering docked ship from container
+					# Seamless entry - no clamping (same as undocked ship entry)
+					# Entry zone: 14.0 < z < 15.0
+					# Exit threshold: z > 15.0
+					# No overlap, so no clamp needed
 					print("ENTERING DOCKED SHIP:")
 					print("  Player container pos: ", player_container_pos)
 					print("  Ship dock pos: ", ship_dock_transform.origin)
-					print("  Ship local pos (before clamp): ", ship_local_pos)
-
-					# CRITICAL: Clamp Z position to prevent immediate exit
-					# Ship floor extends from z=-15 to z=+15
-					# Exit detection triggers at z > 15.0
-					# Clamp to max z=14.0 to give 1 unit buffer
-					if ship_local_pos.z > 14.0:
-						ship_local_pos.z = 14.0
-
-					print("  Ship local pos (after clamp): ", ship_local_pos)
+					print("  Ship local pos: ", ship_local_pos)
 
 					# Get velocity in container space and transform to ship space
 					var container_velocity = character.get_proxy_velocity()

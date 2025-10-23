@@ -632,7 +632,6 @@ func _check_transitions() -> void:
 				character.enter_vehicle()
 				character.set_proxy_position(local_pos, local_velocity)
 				# Set character visual orientation to match ship (world basis)
-				character.set_target_visual_orientation(Basis.IDENTITY)
 				vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
 			elif character.is_in_container and vehicle.is_docked:
 				# Player in container space, check if can enter docked ship
@@ -670,13 +669,14 @@ func _check_transitions() -> void:
 					var container_velocity = character.get_proxy_velocity()
 					var ship_local_velocity = ship_dock_transform.basis.inverse() * container_velocity
 
+					# Find which container the ship is docked in (reuse for both camera and character)
+					var docked_container = vehicle._get_docked_container()
+
 					# CRITICAL: Adjust camera orientation for container->ship transition
 					# Transition camera up direction to match ship interior
 					if is_instance_valid(dual_camera):
 						# Ship's Y axis in container space is the ship's "up"
 						var ship_up_in_container = ship_dock_transform.basis.y
-						# Find which container the ship is docked in
-						var docked_container = vehicle._get_docked_container()
 						if docked_container and docked_container.exterior_body:
 							# Transform to world space
 							var container_transform = docked_container.exterior_body.global_transform
@@ -702,12 +702,10 @@ func _check_transitions() -> void:
 					character.set_proxy_position(ship_local_pos, ship_local_velocity)
 
 					# Set character visual orientation to match docked ship
-					# Ship's orientation in world space
-					var docked_container = vehicle._get_docked_container()
+					# Ship's orientation in world space (reuse docked_container from above)
 					if docked_container and docked_container.exterior_body:
 						var container_transform = docked_container.exterior_body.global_transform
 						var ship_world_basis = container_transform.basis * ship_dock_transform.basis
-						character.set_target_visual_orientation(ship_world_basis)
 
 					# Set BOTH cooldowns to prevent immediate exit
 					vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
@@ -799,7 +797,6 @@ func _check_transitions() -> void:
 					character.exit_container()
 
 					# Set character visual orientation to world up
-					character.set_target_visual_orientation(Basis.IDENTITY)
 
 					# Transition camera up direction back to world up
 					if is_instance_valid(dual_camera):
@@ -977,7 +974,6 @@ func _check_transitions() -> void:
 				# Set character visual orientation to match container
 				if target_container and target_container.exterior_body:
 					var container_basis = target_container.exterior_body.global_transform.basis
-					character.set_target_visual_orientation(container_basis)
 
 				# Set BOTH cooldowns to prevent immediate re-entry
 				vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
@@ -1006,7 +1002,6 @@ func _check_transitions() -> void:
 					character.set_world_position(world_pos, world_velocity)
 
 					# Set character visual orientation to world up
-					character.set_target_visual_orientation(Basis.IDENTITY)
 
 					# Set vehicle cooldown for ship→world exit
 					vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
@@ -1094,7 +1089,6 @@ func _check_transitions() -> void:
 
 				# Set character visual orientation to match container
 				var container_basis = container.exterior_body.global_transform.basis
-				character.set_target_visual_orientation(container_basis)
 
 				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 				break  # Only enter one container at a time
@@ -1392,25 +1386,32 @@ func _is_anyone_in_container(container: VehicleContainer) -> bool:
 	return false
 
 func _is_exit_position_blocked(world_position: Vector3, up_direction: Vector3, forward_direction: Vector3) -> bool:
-	# Raycast forward from exit position to check if path is clear
+	# Check if exit position is blocked using capsule shape at the exit opening
 	# Returns true if blocked (can't exit safely), false if clear
 
 	var space_state = get_world_3d().direct_space_state
 
-	# Create query parameters for shape cast
+	# Create query parameters for shape cast - use box instead of capsule for better entrance coverage
 	var query = PhysicsShapeQueryParameters3D.new()
 
-	# Create a smaller capsule shape to be less strict
-	var shape = CapsuleShape3D.new()
-	shape.radius = 0.3  # Reduced from 0.5
-	shape.height = 1.8  # Reduced from 2.0
+	# Create a box shape at the entrance opening (like a doorway)
+	# This checks the rectangular area the player needs to walk through
+	var shape = BoxShape3D.new()
+	shape.size = Vector3(2.0, 2.0, 0.5)  # Wide enough for player (width, height, depth)
 	query.shape = shape
 
-	# Position the shape slightly above ground level
-	var check_pos = world_position + up_direction * 0.5
-	query.transform = Transform3D(Basis(), check_pos)
+	# Position the box at the exit opening, oriented with the exit direction
+	# The box should be right at the entrance, checking if it's blocked
+	var box_basis = Basis()
+	box_basis.z = forward_direction.normalized()
+	box_basis.y = up_direction.normalized()
+	box_basis.x = box_basis.y.cross(box_basis.z).normalized()
 
-	# Exclude certain collision layers (e.g., only check static geometry)
+	# Place box right at the exit position
+	var check_pos = world_position + forward_direction * 0.25  # Slightly forward into the opening
+	query.transform = Transform3D(box_basis, check_pos)
+
+	# Exclude certain collision layers
 	query.collision_mask = 1  # Only layer 1
 
 	# Exclude the vehicle and container bodies from collision check
@@ -1423,8 +1424,8 @@ func _is_exit_position_blocked(world_position: Vector3, up_direction: Vector3, f
 		exclude_rids.append(vehicle_container_large.exterior_body.get_rid())
 	query.exclude = exclude_rids
 
-	# Check if the exit position overlaps with any collision
-	var result = space_state.intersect_shape(query, 10)  # Check multiple to filter
+	# Check if the exit opening overlaps with any collision (terrain, walls, etc.)
+	var result = space_state.intersect_shape(query, 10)
 
 	# Filter out the vehicle/container bodies
 	for hit in result:
@@ -1432,39 +1433,10 @@ func _is_exit_position_blocked(world_position: Vector3, up_direction: Vector3, f
 		# Skip if it's the vehicle or container we're exiting from
 		if collider == vehicle or collider == vehicle_container_small or collider == vehicle_container_large:
 			continue
-		# Found a blocking collision
-		print("[EXIT CHECK] Exit blocked by: ", collider.name if collider else "unknown")
+		# Found a blocking collision - exit opening is blocked
+		print("[EXIT CHECK] Exit opening blocked by: ", collider.name if collider else "unknown")
 		return true
 
-	# Raycast FORWARD to check if path ahead is clear
-	var ray_query = PhysicsRayQueryParameters3D.new()
-	ray_query.from = world_position + up_direction * 0.1  # Start slightly above ground
-	ray_query.to = world_position + forward_direction * 3.0  # Check 3 units forward in exit direction
-	ray_query.collision_mask = 1  # Only layer 1
-	ray_query.exclude = exclude_rids
-
-	var ray_result = space_state.intersect_ray(ray_query)
-
-	if not ray_result.is_empty():
-		# Found obstacle in path
-		var collider = ray_result.collider
-		print("[EXIT CHECK] Forward path blocked by: ", collider.name if collider else "unknown", " at distance: ", ray_result.position.distance_to(world_position))
-		return true
-
-	# Also check if there's ground below (don't want to exit into void)
-	var down_ray = PhysicsRayQueryParameters3D.new()
-	down_ray.from = world_position + up_direction * 0.1
-	down_ray.to = world_position - up_direction * 5.0  # Check 5 units down
-	down_ray.collision_mask = 1
-	down_ray.exclude = exclude_rids
-
-	var down_result = space_state.intersect_ray(down_ray)
-
-	if down_result.is_empty():
-		# No ground found - would fall into void
-		print("[EXIT CHECK] No ground found below exit position (checked 5 units down)")
-		return true
-
-	# Exit position is safe
-	print("[EXIT CHECK] Exit clear - forward path clear, ground at: ", down_result.position.distance_to(world_position), " units below")
+	# Exit opening is clear
+	print("[EXIT CHECK] Exit opening clear")
 	return false

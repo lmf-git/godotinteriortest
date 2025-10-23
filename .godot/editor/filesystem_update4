@@ -1,4 +1,2 @@
-res://dual_camera_view.gd
-res://game_manager.gd
 res://character_controller.gd
-res://vehicle.gd
+res://game_manager.gd

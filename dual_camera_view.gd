@@ -27,7 +27,10 @@ var external_panel: Panel  # Store reference to show/hide
 var dock_panel: Panel  # Store reference to show/hide
 
 var mouse_sensitivity: float = 0.002
-var base_rotation: Vector3 = Vector3.ZERO
+var base_rotation: Vector3 = Vector3.ZERO  # Yaw and pitch from mouse input
+var target_up_vector: Vector3 = Vector3.UP  # Target up direction for smooth gravity transitions
+var current_up_vector: Vector3 = Vector3.UP  # Current interpolated up direction
+var up_transition_speed: float = 5.0  # How fast to transition up direction
 var third_person_mode: bool = false
 var third_person_distance: float = 10.0
 
@@ -404,6 +407,7 @@ func _update_viewport_sizes() -> void:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+		# Update base rotation for mouse look (yaw and pitch only)
 		base_rotation.y -= event.relative.x * mouse_sensitivity
 		base_rotation.x -= event.relative.y * mouse_sensitivity
 		base_rotation.x = clamp(base_rotation.x, -PI/2, PI/2)
@@ -420,12 +424,47 @@ func _input(event: InputEvent) -> void:
 		if event.keycode == KEY_O:
 			third_person_mode = !third_person_mode
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	# Smoothly interpolate camera up direction to match gravity
+	_update_up_direction_transition(delta)
+
 	_update_main_camera()
 	_update_external_camera()
 	_update_dock_interior_camera()
 	_update_proxy_character_visuals()
 	_update_pip_visibility()
+
+func _update_up_direction_transition(delta: float) -> void:
+	# Smoothly interpolate up direction to match new gravity orientation
+	# This transitions pitch/roll while maintaining player's look direction (yaw)
+	if current_up_vector.distance_to(target_up_vector) > 0.01:
+		current_up_vector = current_up_vector.slerp(target_up_vector, up_transition_speed * delta).normalized()
+	else:
+		current_up_vector = target_up_vector
+
+func set_target_up_direction(new_up: Vector3) -> void:
+	# Set the target up direction for smooth gravity transition
+	# Used when entering/exiting spaces with different orientations
+	var normalized_new_up = new_up.normalized()
+
+	# Check if up direction is flipping (dot product < 0 means more than 90° change)
+	# This happens when transitioning from upside down to right-side up
+	if current_up_vector.dot(normalized_new_up) < 0:
+		# Up vector is flipping - need to flip yaw by 180° to maintain view direction
+		base_rotation.y += PI
+		print("[CAMERA] Up direction flipping - adjusting yaw by PI")
+
+	target_up_vector = normalized_new_up
+
+func _get_camera_basis_from_look_and_up(forward: Vector3, up: Vector3) -> Basis:
+	# Construct a camera basis from a forward direction and up vector
+	# This maintains look direction while adjusting to new gravity orientation
+	var right = forward.cross(up).normalized()
+	var actual_up = right.cross(forward).normalized()
+	var actual_forward = -forward.normalized()  # Camera looks down -Z
+
+	# Construct basis from orthonormal vectors
+	return Basis(right, actual_up, actual_forward)
 
 func _update_main_camera() -> void:
 	if not is_instance_valid(character):
@@ -458,38 +497,41 @@ func _update_container_camera() -> void:
 	var container_pos = vehicle_container.exterior_body.global_position
 	var container_basis = vehicle_container.exterior_body.global_transform.basis
 
+	# Get look direction from base_rotation (yaw and pitch)
+	var rotation_basis = Basis.from_euler(base_rotation)
+	var local_forward = -rotation_basis.z
+
+	# Transform current up vector to container local space to calculate proper camera offset
+	var local_up = container_basis.inverse() * current_up_vector
+
 	if third_person_mode:
 		# Third person: camera behind and above character in container space
-		var proxy_camera_pos = Vector3(proxy_pos.x, proxy_pos.y + 3, proxy_pos.z)
-
-		# Apply rotation to offset in proxy space
-		var rotation_basis = Basis.from_euler(base_rotation)
-		var forward = -rotation_basis.z
-		var offset = -forward * third_person_distance
-		proxy_camera_pos += offset
-
-		# With recursive nesting, proxy_pos is already in container's local coordinates
-		# No Y offset conversion needed
-		var local_camera_pos = proxy_camera_pos
+		# Use transitioning up vector for "above" offset instead of hardcoded Y
+		var up_offset = local_up * 3.0
+		var back_offset = -local_forward * third_person_distance
+		var local_camera_pos = proxy_pos + up_offset + back_offset
 
 		var world_camera_pos = container_pos + container_basis * local_camera_pos
 		main_camera.global_position = world_camera_pos
 
-		var local_mouse_rotation = Basis.from_euler(Vector3(base_rotation.x, base_rotation.y, 0))
-		main_camera.global_transform.basis = container_basis * local_mouse_rotation
+		# Transform local forward to world space, then construct basis with transitioning up
+		var world_forward = container_basis * local_forward
+		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, current_up_vector)
+		main_camera.global_transform.basis = camera_basis
 	else:
 		# First person: camera at head height
-		var proxy_camera_pos = Vector3(proxy_pos.x, proxy_pos.y + 1.5, proxy_pos.z)
-
-		# With recursive nesting, proxy_pos is already in container's local coordinates
-		var local_camera_pos = proxy_camera_pos
+		# Use transitioning up vector for head offset instead of hardcoded Y
+		var head_offset = local_up * 1.5
+		var local_camera_pos = proxy_pos + head_offset
 
 		var world_camera_pos = container_pos + container_basis * local_camera_pos
 
 		main_camera.global_position = world_camera_pos
 
-		var local_mouse_rotation = Basis.from_euler(Vector3(base_rotation.x, base_rotation.y, 0))
-		main_camera.global_transform.basis = container_basis * local_mouse_rotation
+		# Transform local forward to world space, then construct basis with transitioning up
+		var world_forward = container_basis * local_forward
+		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, current_up_vector)
+		main_camera.global_transform.basis = camera_basis
 
 func _update_vehicle_camera() -> void:
 	if not is_instance_valid(vehicle) or not vehicle.exterior_body:
@@ -499,47 +541,63 @@ func _update_vehicle_camera() -> void:
 	var vehicle_pos = vehicle.exterior_body.global_position
 	var vehicle_basis = vehicle.exterior_body.global_transform.basis
 
+	# Get look direction from base_rotation (yaw and pitch)
+	var rotation_basis = Basis.from_euler(base_rotation)
+	var local_forward = -rotation_basis.z
+
+	# Transform current up vector to vehicle local space to calculate proper camera offset
+	var local_up = vehicle_basis.inverse() * current_up_vector
+
 	if third_person_mode:
 		# Third person: camera behind and above character in vehicle space
-		var proxy_camera_pos = Vector3(proxy_pos.x, proxy_pos.y + 3, proxy_pos.z)
+		# Use transitioning up vector for "above" offset instead of hardcoded Y
+		var up_offset = local_up * 3.0
+		var back_offset = -local_forward * third_person_distance
+		var local_camera_pos = proxy_pos + up_offset + back_offset
 
-		# Apply rotation to offset in proxy space
-		var rotation_basis = Basis.from_euler(base_rotation)
-		var forward = -rotation_basis.z
-		var offset = -forward * third_person_distance
-		proxy_camera_pos += offset
-
-		var world_camera_pos = vehicle_pos + vehicle_basis * proxy_camera_pos
+		var world_camera_pos = vehicle_pos + vehicle_basis * local_camera_pos
 		main_camera.global_position = world_camera_pos
 
-		var local_mouse_rotation = Basis.from_euler(Vector3(base_rotation.x, base_rotation.y, 0))
-		main_camera.global_transform.basis = vehicle_basis * local_mouse_rotation
+		# Transform local forward to world space, then construct basis with transitioning up
+		var world_forward = vehicle_basis * local_forward
+		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, current_up_vector)
+		main_camera.global_transform.basis = camera_basis
 	else:
 		# First person: camera at head height
-		var proxy_camera_pos = Vector3(proxy_pos.x, proxy_pos.y + 1.5, proxy_pos.z)
-		var world_camera_pos = vehicle_pos + vehicle_basis * proxy_camera_pos
+		# Use transitioning up vector for head offset instead of hardcoded Y
+		var head_offset = local_up * 1.5
+		var local_camera_pos = proxy_pos + head_offset
+
+		var world_camera_pos = vehicle_pos + vehicle_basis * local_camera_pos
 
 		main_camera.global_position = world_camera_pos
 
-		var local_mouse_rotation = Basis.from_euler(Vector3(base_rotation.x, base_rotation.y, 0))
-		main_camera.global_transform.basis = vehicle_basis * local_mouse_rotation
+		# Transform local forward to world space, then construct basis with transitioning up
+		var world_forward = vehicle_basis * local_forward
+		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, current_up_vector)
+		main_camera.global_transform.basis = camera_basis
 
 func _update_world_camera() -> void:
 	var world_pos = character.get_world_position()
 
+	# Get look direction from base_rotation
+	var rotation_basis = Basis.from_euler(base_rotation)
+	var forward = -rotation_basis.z
+
 	if third_person_mode:
 		# Third person camera - position behind and above character
-		var rotation_basis = Basis.from_euler(base_rotation)
-		var forward = -rotation_basis.z
 		var offset = -forward * third_person_distance + Vector3(0, 3, 0)
 		main_camera.global_position = world_pos + offset
-		main_camera.global_transform.basis = rotation_basis
+		# In world space, up is always Vector3.UP (no transition needed)
+		var camera_basis = _get_camera_basis_from_look_and_up(forward, Vector3.UP)
+		main_camera.global_transform.basis = camera_basis
 	else:
 		# First person camera - at head height
 		var cam_pos = world_pos + Vector3(0, 1.5, 0)
 		main_camera.global_position = cam_pos
-		var rotation_basis = Basis.from_euler(base_rotation)
-		main_camera.global_transform.basis = rotation_basis
+		# In world space, up is always Vector3.UP (no transition needed)
+		var camera_basis = _get_camera_basis_from_look_and_up(forward, Vector3.UP)
+		main_camera.global_transform.basis = camera_basis
 
 func _update_external_camera() -> void:
 	# External camera shows ship PROXY interior (stable, non-moving space)

@@ -20,6 +20,11 @@ var is_in_container: bool = false
 var current_space: String = "vehicle_interior"  # 'vehicle_interior', 'space', 'container_interior'
 var transition_lock: bool = false  # Prevents movement during transition frame
 
+# Visual orientation transition
+var target_visual_basis: Basis = Basis.IDENTITY
+var current_visual_basis: Basis = Basis.IDENTITY
+var visual_orientation_speed: float = 5.0  # How fast to transition orientation
+
 # Input
 var input_direction: Vector3 = Vector3.ZERO
 var jump_pressed: bool = false
@@ -117,9 +122,23 @@ func _physics_process(delta: float) -> void:
 	if transition_lock:
 		transition_lock = false
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	# Update visual orientation transition
+	_update_visual_orientation_transition(delta)
+
 	# Update visual every frame for smooth rendering (not just physics frames)
 	_update_character_visual_position()
+
+func _update_visual_orientation_transition(delta: float) -> void:
+	# Smoothly interpolate character visual orientation
+	if not current_visual_basis.is_equal_approx(target_visual_basis):
+		# Use slerp for smooth rotation transition
+		var current_quat = Quaternion(current_visual_basis)
+		var target_quat = Quaternion(target_visual_basis)
+		var interpolated_quat = current_quat.slerp(target_quat, visual_orientation_speed * delta)
+		current_visual_basis = Basis(interpolated_quat)
+	else:
+		current_visual_basis = target_visual_basis
 
 func _handle_movement(delta: float) -> void:
 	# Use appropriate physics body based on current space
@@ -165,6 +184,8 @@ func _handle_movement(delta: float) -> void:
 
 func _update_character_visual_position() -> void:
 	# Update character visual based on current physics space
+	# Uses transitioning basis for smooth orientation changes
+	# Also updates target orientation to match current space
 	if is_in_container and proxy_body.is_valid():
 		# Character in container interior - position relative to container
 		# With recursive nesting, proxy_pos is already in container's local coordinate system
@@ -186,11 +207,15 @@ func _update_character_visual_position() -> void:
 						var container_transform = container.exterior_body.global_transform
 						var container_basis = container_transform.basis
 
+						# Update target orientation to match container
+						target_visual_basis = container_basis
+
 						# Transform proxy position (in container's interior space) to world space
 						# No Y offset needed - coordinates are already relative to container
 						var world_pos = container_transform.origin + container_basis * proxy_pos
 						character_visual.global_position = world_pos
-						character_visual.global_transform.basis = container_basis
+						# Use transitioning basis for smooth orientation
+						character_visual.global_transform.basis = current_visual_basis
 
 						# Debug: Print which container we're using for visual
 						if Engine.get_frames_drawn() % 60 == 0:  # Every 60 frames
@@ -225,24 +250,39 @@ func _update_character_visual_position() -> void:
 							var container_transform = docked_container.exterior_body.global_transform
 							var container_basis = container_transform.basis
 
+							# Calculate ship's world orientation and update target
+							var ship_world_basis = container_basis * ship_dock_transform.basis
+							target_visual_basis = ship_world_basis
+
 							# Transform to world space
 							var world_pos = container_transform.origin + container_basis * container_proxy_pos
 							character_visual.global_position = world_pos
-							character_visual.global_transform.basis = container_basis
+							# Use transitioning basis for smooth orientation
+							character_visual.global_transform.basis = current_visual_basis
 					elif vehicle.exterior_body:
 						# Vehicle not docked - use exterior body transform
 						var vehicle_transform = vehicle.exterior_body.global_transform
 						var vehicle_basis = vehicle_transform.basis
 
+						# Update target orientation to match vehicle (world up for undocked ships)
+						target_visual_basis = Basis.IDENTITY
+
 						# Transform proxy position to world space
 						var world_pos = vehicle_transform.origin + vehicle_basis * proxy_pos
 						character_visual.global_position = world_pos
-						character_visual.global_transform.basis = vehicle_basis
+						# Use transitioning basis for smooth orientation
+						character_visual.global_transform.basis = current_visual_basis
 					break
 	elif not is_in_vehicle and not is_in_container and world_body.is_valid():
 		# Character in world space
 		var world_transform: Transform3D = PhysicsServer3D.body_get_state(world_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
-		character_visual.global_transform = world_transform
+		character_visual.global_position = world_transform.origin
+
+		# Update target orientation to world up
+		target_visual_basis = Basis.IDENTITY
+
+		# Use transitioning basis for smooth orientation
+		character_visual.global_transform.basis = current_visual_basis
 
 	# Character visibility handled by camera system
 	# Don't set visibility here - let dual_camera_view control it
@@ -297,6 +337,10 @@ func enter_container() -> void:
 func exit_container() -> void:
 	is_in_container = false
 	current_space = "space"
+
+func set_target_visual_orientation(basis: Basis) -> void:
+	# Set target orientation for smooth transition
+	target_visual_basis = basis
 
 func get_proxy_position() -> Vector3:
 	if proxy_body.is_valid():

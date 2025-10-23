@@ -531,9 +531,26 @@ func apply_rotation(axis: Vector3, torque: float) -> void:
 			new_angvel.z = clamp(new_angvel.z, -3.0, 3.0)
 
 			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, new_angvel)
+			print("[VEHICLE] Applied rotation to DOCKED ship - new_angvel: ", new_angvel)
+		else:
+			print("[VEHICLE] Docked but no container found!")
 	elif exterior_body:
-		# Apply rotation in world
-		exterior_body.apply_torque(axis * torque)
+		# Apply rotation in world - use same physics as docked for consistency
+		var mass = exterior_body.mass
+		var angular_acceleration = torque / mass
+		var angular_impulse = axis * angular_acceleration * get_process_delta_time()
+		var current_angvel = exterior_body.angular_velocity
+		var new_angvel = current_angvel + angular_impulse
+
+		# Clamp angular velocity to same limits as docked (3.0 rad/s = ~172 deg/s)
+		new_angvel.x = clamp(new_angvel.x, -3.0, 3.0)
+		new_angvel.y = clamp(new_angvel.y, -3.0, 3.0)
+		new_angvel.z = clamp(new_angvel.z, -3.0, 3.0)
+
+		exterior_body.angular_velocity = new_angvel
+		print("[VEHICLE] Applied rotation to FREE ship - new_angvel: ", new_angvel)
+	else:
+		print("[VEHICLE] Cannot apply rotation - no valid body!")
 
 func toggle_magnetism() -> void:
 	# Toggle artificial gravity in THIS vehicle's interior space

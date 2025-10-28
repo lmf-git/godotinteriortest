@@ -31,6 +31,7 @@ var base_rotation: Vector3 = Vector3.ZERO  # Yaw and pitch from mouse input
 var target_up_vector: Vector3 = Vector3.UP  # Target up direction for smooth gravity transitions
 var current_up_vector: Vector3 = Vector3.UP  # Current interpolated up direction
 var up_transition_speed: float = 5.0  # How fast to transition up direction
+var is_transitioning_up: bool = false  # True during space transitions, false otherwise
 var third_person_mode: bool = false
 var third_person_distance: float = 10.0
 
@@ -435,11 +436,15 @@ func _process(delta: float) -> void:
 	_update_pip_visibility()
 
 func _update_up_direction_transition(delta: float) -> void:
-	# Smoothly interpolate up direction to match new gravity orientation
-	# This transitions pitch/roll while maintaining player's look direction (yaw)
-	if current_up_vector.distance_to(target_up_vector) > 0.01:
+	# During space transitions, smoothly interpolate toward target
+	# During normal movement within a space, instantly match the space orientation
+	if is_transitioning_up and current_up_vector.distance_to(target_up_vector) > 0.01:
 		current_up_vector = current_up_vector.slerp(target_up_vector, up_transition_speed * delta).normalized()
+		# Check if transition is complete
+		if current_up_vector.distance_to(target_up_vector) <= 0.01:
+			is_transitioning_up = false
 	else:
+		# Not transitioning - instantly match the target (which tracks current space)
 		current_up_vector = target_up_vector
 
 func set_target_up_direction(new_up: Vector3) -> void:
@@ -447,14 +452,10 @@ func set_target_up_direction(new_up: Vector3) -> void:
 	# Used when entering/exiting spaces with different orientations
 	var normalized_new_up = new_up.normalized()
 
-	# Check if up direction is flipping (dot product < 0 means more than 90° change)
-	# This happens when transitioning from upside down to right-side up
-	if current_up_vector.dot(normalized_new_up) < 0:
-		# Up vector is flipping - need to flip yaw by 180° to maintain view direction
-		base_rotation.y += PI
-		print("[CAMERA] Up direction flipping - adjusting yaw by PI")
-
+	# Don't adjust yaw - the character orientation handles this automatically
+	# The camera uses character's actual up direction which is already correct
 	target_up_vector = normalized_new_up
+	is_transitioning_up = true  # Start smooth up direction transition
 
 func _get_camera_basis_from_look_and_up(forward: Vector3, up: Vector3) -> Basis:
 	# Construct a camera basis from a forward direction and up vector
@@ -497,40 +498,45 @@ func _update_container_camera() -> void:
 	var container_pos = vehicle_container.exterior_body.global_position
 	var container_basis = vehicle_container.exterior_body.global_transform.basis
 
+	# Always use character's actual up direction for instant tracking
+	# This keeps camera locked to the character's orientation
+	var character_up = character.character_visual.global_transform.basis.y
+	var effective_up = character_up
+
 	# Get look direction from base_rotation (yaw and pitch)
 	var rotation_basis = Basis.from_euler(base_rotation)
 	var local_forward = -rotation_basis.z
 
-	# Transform current up vector to container local space to calculate proper camera offset
-	var local_up = container_basis.inverse() * current_up_vector
-
 	if third_person_mode:
-		# Third person: camera behind and above character in container space
-		# Use transitioning up vector for "above" offset instead of hardcoded Y
-		var up_offset = local_up * 3.0
-		var back_offset = -local_forward * third_person_distance
-		var local_camera_pos = proxy_pos + up_offset + back_offset
-
-		var world_camera_pos = container_pos + container_basis * local_camera_pos
+		# Third person: camera behind and above character
+		# Calculate proxy position in world space first
+		var world_proxy_pos = container_pos + container_basis * proxy_pos
+		
+		# Calculate back offset in world space (along look direction)
+		var world_forward = container_basis * local_forward
+		var back_offset = -world_forward * third_person_distance
+		
+		# Add offsets in world space using effective up (handles upside down correctly)
+		var world_camera_pos = world_proxy_pos + effective_up * 3.0 + back_offset
 		main_camera.global_position = world_camera_pos
 
-		# Transform local forward to world space, then construct basis with transitioning up
-		var world_forward = container_basis * local_forward
-		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, current_up_vector)
+		# Construct basis with effective up
+		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, effective_up)
 		main_camera.global_transform.basis = camera_basis
 	else:
 		# First person: camera at head height
-		# Use transitioning up vector for head offset instead of hardcoded Y
-		var head_offset = local_up * 1.5
-		var local_camera_pos = proxy_pos + head_offset
-
-		var world_camera_pos = container_pos + container_basis * local_camera_pos
+		# Calculate proxy position in world space first
+		var world_proxy_pos = container_pos + container_basis * proxy_pos
+		
+		# Then add head offset in world space using effective up
+		# This correctly handles upside down orientation
+		var world_camera_pos = world_proxy_pos + effective_up * 1.5
 
 		main_camera.global_position = world_camera_pos
 
-		# Transform local forward to world space, then construct basis with transitioning up
+		# Transform local forward to world space, then construct basis with effective up
 		var world_forward = container_basis * local_forward
-		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, current_up_vector)
+		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, effective_up)
 		main_camera.global_transform.basis = camera_basis
 
 func _update_vehicle_camera() -> void:
@@ -541,44 +547,52 @@ func _update_vehicle_camera() -> void:
 	var vehicle_pos = vehicle.exterior_body.global_position
 	var vehicle_basis = vehicle.exterior_body.global_transform.basis
 
+	# Always use character's actual up direction for instant tracking
+	# This keeps camera locked to the character's orientation
+	var character_up = character.character_visual.global_transform.basis.y
+	var effective_up = character_up
+
 	# Get look direction from base_rotation (yaw and pitch)
 	var rotation_basis = Basis.from_euler(base_rotation)
 	var local_forward = -rotation_basis.z
 
-	# Transform current up vector to vehicle local space to calculate proper camera offset
-	var local_up = vehicle_basis.inverse() * current_up_vector
-
 	if third_person_mode:
-		# Third person: camera behind and above character in vehicle space
-		# Use transitioning up vector for "above" offset instead of hardcoded Y
-		var up_offset = local_up * 3.0
-		var back_offset = -local_forward * third_person_distance
-		var local_camera_pos = proxy_pos + up_offset + back_offset
-
-		var world_camera_pos = vehicle_pos + vehicle_basis * local_camera_pos
+		# Third person: camera behind and above character
+		# Calculate proxy position in world space first
+		var world_proxy_pos = vehicle_pos + vehicle_basis * proxy_pos
+		
+		# Calculate back offset in world space (along look direction)
+		var world_forward = vehicle_basis * local_forward
+		var back_offset = -world_forward * third_person_distance
+		
+		# Add offsets in world space using effective up (handles upside down correctly)
+		var world_camera_pos = world_proxy_pos + effective_up * 3.0 + back_offset
 		main_camera.global_position = world_camera_pos
 
-		# Transform local forward to world space, then construct basis with transitioning up
-		var world_forward = vehicle_basis * local_forward
-		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, current_up_vector)
+		# Construct basis with effective up
+		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, effective_up)
 		main_camera.global_transform.basis = camera_basis
 	else:
 		# First person: camera at head height
-		# Use transitioning up vector for head offset instead of hardcoded Y
-		var head_offset = local_up * 1.5
-		var local_camera_pos = proxy_pos + head_offset
-
-		var world_camera_pos = vehicle_pos + vehicle_basis * local_camera_pos
+		# Calculate proxy position in world space first
+		var world_proxy_pos = vehicle_pos + vehicle_basis * proxy_pos
+		
+		# Then add head offset in world space using effective up
+		# This correctly handles upside down orientation
+		var world_camera_pos = world_proxy_pos + effective_up * 1.5
 
 		main_camera.global_position = world_camera_pos
 
-		# Transform local forward to world space, then construct basis with transitioning up
+		# Transform local forward to world space, then construct basis with effective up
 		var world_forward = vehicle_basis * local_forward
-		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, current_up_vector)
+		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, effective_up)
 		main_camera.global_transform.basis = camera_basis
 
 func _update_world_camera() -> void:
 	var world_pos = character.get_world_position()
+
+	# Always use world up in world space
+	var effective_up = Vector3.UP
 
 	# Get look direction from base_rotation
 	var rotation_basis = Basis.from_euler(base_rotation)
@@ -588,8 +602,8 @@ func _update_world_camera() -> void:
 		# Third person camera - position behind and above character
 		var offset = -forward * third_person_distance + Vector3(0, 3, 0)
 		main_camera.global_position = world_pos + offset
-		# In world space, up is always Vector3.UP (no transition needed)
-		var camera_basis = _get_camera_basis_from_look_and_up(forward, Vector3.UP)
+		# Use effective_up for instant orientation or smooth transition
+		var camera_basis = _get_camera_basis_from_look_and_up(forward, effective_up)
 		main_camera.global_transform.basis = camera_basis
 	else:
 		# First person camera - at head height
@@ -615,24 +629,62 @@ func _update_external_camera() -> void:
 	var look_target = Vector3(0, 0, 12 * size_scale / 3.0)  # Front entrance
 	external_camera.look_at(look_target, Vector3.UP)
 
+
+func _get_outermost_container() -> VehicleContainer:
+	# Find the highest level (outermost) container in the nesting hierarchy
+	# Start with the container the player/vehicle is in, then check if that container is docked
+	var current_container: VehicleContainer = null
+	
+	# Determine which container the player is currently in
+	if character.is_in_container:
+		# Player is directly in a container - find which one
+		var player_space = PhysicsServer3D.body_get_space(character.proxy_body)
+		if is_instance_valid(vehicle_container) and vehicle_container.get_interior_space() == player_space:
+			current_container = vehicle_container
+	elif character.is_in_vehicle and is_instance_valid(vehicle) and vehicle.is_docked:
+		# Player is in a docked vehicle - get the container it's docked in
+		current_container = vehicle._get_docked_container()
+	
+	# If no container found, return null
+	if not current_container:
+		return null
+	
+	# Now traverse up the nesting hierarchy to find the outermost container
+	# Keep checking if the current container is itself docked in another container
+	var outermost = current_container
+	while outermost and outermost.is_docked:
+		var parent_container = outermost._get_docked_container()
+		if parent_container:
+			outermost = parent_container
+		else:
+			break
+	
+	return outermost
+
 func _update_dock_interior_camera() -> void:
-	# Dock interior camera shows station PROXY interior (stable, non-moving space)
+	# Dock interior camera shows the OUTERMOST container interior (highest level nesting)
 	if not is_instance_valid(dock_interior_camera):
 		return
 
-	# Camera is in the proxy interior space (stable coordinates)
-	# Position camera at back of station interior, moderate elevation to see docked ship
-	# With recursive nesting, container uses relative coordinates (floor at y = -1.4 * size_scale)
-	var size_scale = 15.0
+	# Get the outermost container in the nesting hierarchy
+	var outermost_container = _get_outermost_container()
+	if not outermost_container:
+		return
 
-	# Position camera to see the docked ship
-	# Floor is at y = -21.0, so camera at y = -6.0 gives good view
-	var cam_pos = Vector3(0, -6.0, -3.0 * size_scale)  # Closer, lower view
+	# Use the outermost container's size for camera positioning
+	var size_scale = 3.0 * outermost_container.size_multiplier
+	
+	# Position camera at back of container interior, elevated to see contents
+	# Floor is at y = -1.5 * size_scale + 0.1
+	var floor_y = -1.5 * size_scale + 0.1
+	var cam_y = floor_y + 4.0 * size_scale  # Camera elevated above floor
+	var cam_z = -3.5 * size_scale  # Camera at back of container
+	var cam_pos = Vector3(0, cam_y, cam_z)
 
 	dock_interior_camera.position = cam_pos
 
-	# Look at docking area center (slightly above floor to center on ship)
-	var look_target = Vector3(0, -16.0, 0)  # Center of dock area
+	# Look at the center of the docking area
+	var look_target = Vector3(0, floor_y + 1.5 * size_scale, 0)  # Center height
 	dock_interior_camera.look_at(look_target, Vector3.UP)
 
 func get_forward_direction() -> Vector3:

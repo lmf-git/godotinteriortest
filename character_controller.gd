@@ -20,8 +20,12 @@ var is_in_container: bool = false
 var current_space: String = "vehicle_interior"  # 'vehicle_interior', 'space', 'container_interior'
 var transition_lock: bool = false  # Prevents movement during transition frame
 
-# Visual orientation - directly uses space's basis (no transition needed)
-# Player always appears to stand on the floor of the space they're in
+# Visual orientation transition
+# Transitions smoothly when moving between spaces, but stays fixed when space rotates
+var target_visual_basis: Basis = Basis.IDENTITY
+var current_visual_basis: Basis = Basis.IDENTITY
+var visual_orientation_speed: float = 5.0  # How fast to transition orientation
+var is_transitioning: bool = false  # True during space transitions, false otherwise
 
 # Input
 var input_direction: Vector3 = Vector3.ZERO
@@ -120,9 +124,37 @@ func _physics_process(delta: float) -> void:
 	if transition_lock:
 		transition_lock = false
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	# Update visual orientation transition (only when changing spaces)
+	_update_visual_orientation_transition(delta)
+	
 	# Update visual every frame for smooth rendering (not just physics frames)
-	_update_character_visual_position()
+	_update_character_visual_position(delta)
+
+func _update_visual_orientation_transition(delta: float) -> void:
+	# During space transitions, smoothly interpolate toward target
+	# During normal movement within a space, instantly match the space orientation
+	# This is controlled by is_transitioning flag set during space changes
+	
+	# Debug: Print transitioning state and orientation
+	if Engine.get_frames_drawn() % 120 == 0:
+		print("[CHAR ORIENT] is_transitioning: ", is_transitioning)
+		if is_transitioning:
+			print("[CHAR ORIENT] WARNING: Transitioning when shouldn't be!")
+	
+	if is_transitioning and not current_visual_basis.is_equal_approx(target_visual_basis):
+		# Use slerp for smooth rotation transition between spaces
+		var current_quat = Quaternion(current_visual_basis)
+		var target_quat = Quaternion(target_visual_basis)
+		var interpolated_quat = current_quat.slerp(target_quat, visual_orientation_speed * delta)
+		current_visual_basis = Basis(interpolated_quat)
+		
+		# Check if transition is complete
+		if current_visual_basis.is_equal_approx(target_visual_basis):
+			is_transitioning = false
+	else:
+		# Not transitioning - instantly match the target (which tracks current space)
+		current_visual_basis = target_visual_basis
 
 func _handle_movement(delta: float) -> void:
 	# Use appropriate physics body based on current space
@@ -166,7 +198,22 @@ func _handle_movement(delta: float) -> void:
 	# Set velocity
 	PhysicsServer3D.body_set_state(current_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, velocity)
 
-func _update_character_visual_position() -> void:
+func _update_character_visual_position(delta: float) -> void:
+	# Handle smooth orientation transition when changing spaces
+	if is_transitioning:
+		# Slerp current_visual_basis toward target_visual_basis
+		if not current_visual_basis.is_equal_approx(target_visual_basis):
+			var current_quat = Quaternion(current_visual_basis)
+			var target_quat = Quaternion(target_visual_basis)
+			var interpolated_quat = current_quat.slerp(target_quat, visual_orientation_speed * delta)
+			current_visual_basis = Basis(interpolated_quat)
+			
+			# Check if transition is complete
+			if current_visual_basis.is_equal_approx(target_visual_basis):
+				is_transitioning = false
+		else:
+			is_transitioning = false
+	
 	# Update character visual based on current physics space
 	# Uses transitioning basis for smooth orientation changes
 	# Also updates target orientation to match current space
@@ -191,15 +238,15 @@ func _update_character_visual_position() -> void:
 						var container_transform = container.exterior_body.global_transform
 						var container_basis = container_transform.basis
 
-						# Player should stand upright on container floor (use container's basis)
-						# This makes player appear to stand on the floor regardless of container rotation
+						# Update target to track container's orientation
+						target_visual_basis = container_basis
 
 						# Transform proxy position (in container's interior space) to world space
 						# No Y offset needed - coordinates are already relative to container
 						var world_pos = container_transform.origin + container_basis * proxy_pos
 						character_visual.global_position = world_pos
-						# Use container's basis so player stands on container floor
-						character_visual.global_transform.basis = container_basis
+						# Use transitioning basis (smoothly follows target)
+						character_visual.global_transform.basis = current_visual_basis
 
 						# Debug: Print which container we're using for visual
 						if Engine.get_frames_drawn() % 60 == 0:  # Every 60 frames
@@ -234,36 +281,39 @@ func _update_character_visual_position() -> void:
 							var container_transform = docked_container.exterior_body.global_transform
 							var container_basis = container_transform.basis
 
-							# Player should stand upright on ship floor (use ship's basis in world)
-							# Calculate ship's world basis from container basis and ship's local basis
+							# Update target to track ship's orientation in world space
 							var ship_world_basis = container_basis * ship_dock_transform.basis
+							target_visual_basis = ship_world_basis
 
 							# Transform to world space
 							var world_pos = container_transform.origin + container_basis * container_proxy_pos
 							character_visual.global_position = world_pos
-							# Use ship's world basis so player stands on ship floor
-							character_visual.global_transform.basis = ship_world_basis
+							# Use transitioning basis (smoothly follows target)
+							character_visual.global_transform.basis = current_visual_basis
 					elif vehicle.exterior_body:
 						# Vehicle not docked - use exterior body transform
 						var vehicle_transform = vehicle.exterior_body.global_transform
 						var vehicle_basis = vehicle_transform.basis
 
-						# Player should stand upright on ship floor (use ship's basis)
-						# This makes player appear to stand on the floor regardless of ship rotation
+						# Update target to track ship's orientation
+						target_visual_basis = vehicle_basis
 
 						# Transform proxy position to world space
 						var world_pos = vehicle_transform.origin + vehicle_basis * proxy_pos
 						character_visual.global_position = world_pos
-						# Use ship's basis so player stands on ship floor
-						character_visual.global_transform.basis = vehicle_basis
+						# Use transitioning basis (smoothly follows target)
+						character_visual.global_transform.basis = current_visual_basis
 					break
 	elif not is_in_vehicle and not is_in_container and world_body.is_valid():
 		# Character in world space
 		var world_transform: Transform3D = PhysicsServer3D.body_get_state(world_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 		character_visual.global_position = world_transform.origin
 
-		# In world space, player stands upright (world up)
-		character_visual.global_transform.basis = Basis.IDENTITY
+		# Update target to world up
+		target_visual_basis = Basis.IDENTITY
+
+		# Use transitioning basis (smoothly follows target)
+		character_visual.global_transform.basis = current_visual_basis
 
 	# Character visibility handled by camera system
 	# Don't set visibility here - let dual_camera_view control it
@@ -302,22 +352,53 @@ func set_jump(pressed: bool) -> void:
 func set_running(running: bool) -> void:
 	is_running = running
 
-func enter_vehicle() -> void:
+func enter_vehicle(should_transition: bool = true, initial_basis: Basis = Basis.IDENTITY) -> void:
 	is_in_vehicle = true
 	current_space = "vehicle_interior"
+	is_transitioning = should_transition  # Start smooth orientation transition only if requested
+	
+	# If transitioning and initial_basis provided, set it as target
+	if should_transition and initial_basis != Basis.IDENTITY:
+		target_visual_basis = initial_basis
 
-func exit_vehicle() -> void:
+func exit_vehicle(target_basis: Basis = Basis.IDENTITY) -> void:
 	is_in_vehicle = false
 	current_space = "space"
+	is_transitioning = true  # Start smooth orientation transition
+	
+	# Set target for smooth transition
+	if target_basis != Basis.IDENTITY:
+		target_visual_basis = target_basis
 
-func enter_container() -> void:
+func enter_container(target_basis: Basis = Basis.IDENTITY) -> void:
 	is_in_container = true
 	is_in_vehicle = false
 	current_space = "container_interior"
+	is_transitioning = true  # Start smooth orientation transition
+	
+	# Set target for smooth transition
+	if target_basis != Basis.IDENTITY:
+		target_visual_basis = target_basis
 
-func exit_container() -> void:
+func exit_container(target_basis: Basis = Basis.IDENTITY) -> void:
 	is_in_container = false
 	current_space = "space"
+	is_transitioning = true  # Start smooth orientation transition
+	
+	# Set target for smooth transition
+	if target_basis != Basis.IDENTITY:
+		target_visual_basis = target_basis
+
+func set_target_visual_orientation(new_basis: Basis) -> void:
+	# Set target orientation for smooth transition between spaces
+	# NOTE: This function is no longer used - orientation is tracked automatically
+	target_visual_basis = new_basis
+
+func initialize_visual_orientation(initial_basis: Basis) -> void:
+	# Initialize orientation at game start (no transition)
+	# Sets both current and target so there's no initial lerp
+	target_visual_basis = initial_basis
+	current_visual_basis = initial_basis
 
 func get_proxy_position() -> Vector3:
 	if proxy_body.is_valid():

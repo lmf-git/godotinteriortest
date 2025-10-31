@@ -25,7 +25,7 @@ var transition_lock: bool = false  # Prevents movement during transition frame
 var target_visual_basis: Basis = Basis.IDENTITY
 var current_visual_basis: Basis = Basis.IDENTITY
 var visual_orientation_speed: float = 5.0  # How fast to transition orientation
-var is_transitioning: bool = false  # True during space transitions, false otherwise
+var is_reorienting: bool = false  # True during space transitions, false otherwise
 
 # Input
 var input_direction: Vector3 = Vector3.ZERO
@@ -134,24 +134,18 @@ func _process(delta: float) -> void:
 func _update_visual_orientation_transition(delta: float) -> void:
 	# During space transitions, smoothly interpolate toward target
 	# During normal movement within a space, instantly match the space orientation
-	# This is controlled by is_transitioning flag set during space changes
-	
-	# Debug: Print transitioning state and orientation
-	if Engine.get_frames_drawn() % 120 == 0:
-		print("[CHAR ORIENT] is_transitioning: ", is_transitioning)
-		if is_transitioning:
-			print("[CHAR ORIENT] WARNING: Transitioning when shouldn't be!")
-	
-	if is_transitioning and not current_visual_basis.is_equal_approx(target_visual_basis):
+	# This is controlled by is_reorienting flag set during space changes
+
+	if is_reorienting and not current_visual_basis.is_equal_approx(target_visual_basis):
 		# Use slerp for smooth rotation transition between spaces
 		var current_quat = Quaternion(current_visual_basis)
 		var target_quat = Quaternion(target_visual_basis)
 		var interpolated_quat = current_quat.slerp(target_quat, visual_orientation_speed * delta)
 		current_visual_basis = Basis(interpolated_quat)
-		
+
 		# Check if transition is complete
 		if current_visual_basis.is_equal_approx(target_visual_basis):
-			is_transitioning = false
+			is_reorienting = false
 	else:
 		# Not transitioning - instantly match the target (which tracks current space)
 		current_visual_basis = target_visual_basis
@@ -200,19 +194,19 @@ func _handle_movement(delta: float) -> void:
 
 func _update_character_visual_position(delta: float) -> void:
 	# Handle smooth orientation transition when changing spaces
-	if is_transitioning:
+	if is_reorienting:
 		# Slerp current_visual_basis toward target_visual_basis
 		if not current_visual_basis.is_equal_approx(target_visual_basis):
 			var current_quat = Quaternion(current_visual_basis)
 			var target_quat = Quaternion(target_visual_basis)
 			var interpolated_quat = current_quat.slerp(target_quat, visual_orientation_speed * delta)
 			current_visual_basis = Basis(interpolated_quat)
-			
+
 			# Check if transition is complete
 			if current_visual_basis.is_equal_approx(target_visual_basis):
-				is_transitioning = false
+				is_reorienting = false
 		else:
-			is_transitioning = false
+			is_reorienting = false
 	
 	# Update character visual based on current physics space
 	# Uses transitioning basis for smooth orientation changes
@@ -355,38 +349,38 @@ func set_running(running: bool) -> void:
 func enter_vehicle(should_transition: bool = true, initial_basis: Basis = Basis.IDENTITY) -> void:
 	is_in_vehicle = true
 	current_space = "vehicle_interior"
-	is_transitioning = should_transition  # Start smooth orientation transition only if requested
-	
-	# If transitioning and initial_basis provided, set it as target
-	if should_transition and initial_basis != Basis.IDENTITY:
+	is_reorienting = should_transition  # Start smooth orientation transition only if requested
+
+	# Set target for smooth transition
+	if should_transition:
 		target_visual_basis = initial_basis
 
-func exit_vehicle(target_basis: Basis = Basis.IDENTITY) -> void:
+func exit_vehicle(should_transition: bool = true, target_basis: Basis = Basis.IDENTITY) -> void:
 	is_in_vehicle = false
 	current_space = "space"
-	is_transitioning = true  # Start smooth orientation transition
-	
+	is_reorienting = should_transition  # Start smooth orientation transition only if requested
+
 	# Set target for smooth transition
-	if target_basis != Basis.IDENTITY:
+	if should_transition:
 		target_visual_basis = target_basis
 
-func enter_container(target_basis: Basis = Basis.IDENTITY) -> void:
+func enter_container(should_transition: bool = true, target_basis: Basis = Basis.IDENTITY) -> void:
 	is_in_container = true
 	is_in_vehicle = false
 	current_space = "container_interior"
-	is_transitioning = true  # Start smooth orientation transition
-	
+	is_reorienting = should_transition  # Start smooth orientation transition only if requested
+
 	# Set target for smooth transition
-	if target_basis != Basis.IDENTITY:
+	if should_transition:
 		target_visual_basis = target_basis
 
-func exit_container(target_basis: Basis = Basis.IDENTITY) -> void:
+func exit_container(should_transition: bool = true, target_basis: Basis = Basis.IDENTITY) -> void:
 	is_in_container = false
 	current_space = "space"
-	is_transitioning = true  # Start smooth orientation transition
-	
+	is_reorienting = should_transition  # Start smooth orientation transition only if requested
+
 	# Set target for smooth transition
-	if target_basis != Basis.IDENTITY:
+	if should_transition:
 		target_visual_basis = target_basis
 
 func set_target_visual_orientation(new_basis: Basis) -> void:

@@ -507,15 +507,21 @@ func _update_container_camera() -> void:
 	var rotation_basis = Basis.from_euler(base_rotation)
 	var local_forward = -rotation_basis.z
 
+	# During reorientation, use the character's current visual basis for camera orientation
+	# This ensures smooth transition without jarring camera jumps
+	if character.is_reorienting:
+		# Use character's transitioning visual basis as the effective up
+		effective_up = character.current_visual_basis.y
+
 	if third_person_mode:
 		# Third person: camera behind and above character
 		# Calculate proxy position in world space first
 		var world_proxy_pos = container_pos + container_basis * proxy_pos
-		
+
 		# Calculate back offset in world space (along look direction)
 		var world_forward = container_basis * local_forward
 		var back_offset = -world_forward * third_person_distance
-		
+
 		# Add offsets in world space using effective up (handles upside down correctly)
 		var world_camera_pos = world_proxy_pos + effective_up * 3.0 + back_offset
 		main_camera.global_position = world_camera_pos
@@ -524,15 +530,12 @@ func _update_container_camera() -> void:
 		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, effective_up)
 		main_camera.global_transform.basis = camera_basis
 	else:
-		# First person: camera at head height
-		# Calculate proxy position in world space first
+		# First person: camera at character position
+		# Calculate proxy position in world space
 		var world_proxy_pos = container_pos + container_basis * proxy_pos
-		
-		# Then add head offset in world space using effective up
-		# This correctly handles upside down orientation
-		var world_camera_pos = world_proxy_pos + effective_up * 1.5
 
-		main_camera.global_position = world_camera_pos
+		# Camera at character position (no offset)
+		main_camera.global_position = world_proxy_pos
 
 		# Transform local forward to world space, then construct basis with effective up
 		var world_forward = container_basis * local_forward
@@ -556,15 +559,21 @@ func _update_vehicle_camera() -> void:
 	var rotation_basis = Basis.from_euler(base_rotation)
 	var local_forward = -rotation_basis.z
 
+	# During reorientation, use the character's current visual basis for camera orientation
+	# This ensures smooth transition without jarring camera jumps
+	if character.is_reorienting:
+		# Use character's transitioning visual basis as the effective up
+		effective_up = character.current_visual_basis.y
+
 	if third_person_mode:
 		# Third person: camera behind and above character
 		# Calculate proxy position in world space first
 		var world_proxy_pos = vehicle_pos + vehicle_basis * proxy_pos
-		
+
 		# Calculate back offset in world space (along look direction)
 		var world_forward = vehicle_basis * local_forward
 		var back_offset = -world_forward * third_person_distance
-		
+
 		# Add offsets in world space using effective up (handles upside down correctly)
 		var world_camera_pos = world_proxy_pos + effective_up * 3.0 + back_offset
 		main_camera.global_position = world_camera_pos
@@ -573,15 +582,12 @@ func _update_vehicle_camera() -> void:
 		var camera_basis = _get_camera_basis_from_look_and_up(world_forward, effective_up)
 		main_camera.global_transform.basis = camera_basis
 	else:
-		# First person: camera at head height
-		# Calculate proxy position in world space first
+		# First person: camera at character position
+		# Calculate proxy position in world space
 		var world_proxy_pos = vehicle_pos + vehicle_basis * proxy_pos
-		
-		# Then add head offset in world space using effective up
-		# This correctly handles upside down orientation
-		var world_camera_pos = world_proxy_pos + effective_up * 1.5
 
-		main_camera.global_position = world_camera_pos
+		# Camera at character position (no offset)
+		main_camera.global_position = world_proxy_pos
 
 		# Transform local forward to world space, then construct basis with effective up
 		var world_forward = vehicle_basis * local_forward
@@ -591,8 +597,14 @@ func _update_vehicle_camera() -> void:
 func _update_world_camera() -> void:
 	var world_pos = character.get_world_position()
 
-	# Always use world up in world space
+	# Use world up in world space, but transition smoothly during reorientation
 	var effective_up = Vector3.UP
+
+	# During reorientation, use the character's current visual basis for camera orientation
+	# This ensures smooth transition from interior orientation to world UP
+	if character.is_reorienting:
+		# Use character's transitioning visual basis as the effective up
+		effective_up = character.current_visual_basis.y
 
 	# Get look direction from base_rotation
 	var rotation_basis = Basis.from_euler(base_rotation)
@@ -606,11 +618,10 @@ func _update_world_camera() -> void:
 		var camera_basis = _get_camera_basis_from_look_and_up(forward, effective_up)
 		main_camera.global_transform.basis = camera_basis
 	else:
-		# First person camera - at head height
-		var cam_pos = world_pos + Vector3(0, 1.5, 0)
-		main_camera.global_position = cam_pos
-		# In world space, up is always Vector3.UP (no transition needed)
-		var camera_basis = _get_camera_basis_from_look_and_up(forward, Vector3.UP)
+		# First person camera - at character position
+		main_camera.global_position = world_pos
+		# Use effective_up for smooth transition during reorientation
+		var camera_basis = _get_camera_basis_from_look_and_up(forward, effective_up)
 		main_camera.global_transform.basis = camera_basis
 
 func _update_external_camera() -> void:

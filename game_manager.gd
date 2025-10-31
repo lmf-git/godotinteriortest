@@ -675,10 +675,24 @@ func _check_transitions() -> void:
 				# Adjust camera's base rotation by ship's yaw
 				dual_camera.base_rotation.y -= ship_yaw
 
-				# Don't set any orientation - character controller handles it
-				character.enter_vehicle(needs_reorientation, Basis.IDENTITY)
-				if not needs_reorientation:
-					character.is_transitioning = false
+				# Construct target basis for reorientation (ship's local UP)
+				# When ship is upside down, we want character to reorient to ship's UP
+				var target_basis: Basis
+				if needs_reorientation:
+					# Get camera's forward direction and construct basis with ship's UP
+					var camera_forward = dual_camera.get_forward_direction()
+					var local_forward = ship_basis.inverse() * camera_forward
+					local_forward = local_forward.normalized()
+
+					# Construct basis using ship's local UP (Y-axis in local space)
+					var local_up = Vector3.UP
+					var local_right = local_forward.cross(local_up).normalized()
+					local_forward = local_right.cross(local_up).normalized()
+					target_basis = Basis(local_right, local_up, local_forward)
+				else:
+					target_basis = Basis.IDENTITY
+
+				character.enter_vehicle(needs_reorientation, target_basis)
 
 				# Seamlessly enter - use exact transformed position (no clamping)
 				character.set_proxy_position(entry_check["local_pos"], entry_check["local_velocity"])
@@ -740,10 +754,21 @@ func _check_transitions() -> void:
 					# Adjust camera's base rotation by ship's yaw
 					dual_camera.base_rotation.y -= ship_yaw_in_container
 
-					# Don't set any orientation - character controller handles it
-					character.enter_vehicle(needs_reorientation, Basis.IDENTITY)
-					if not needs_reorientation:
-						character.is_transitioning = false
+					# Construct target basis for reorientation
+					var target_basis: Basis
+					if needs_reorientation:
+						var camera_forward = dual_camera.get_forward_direction()
+						var local_forward = ship_basis.inverse() * camera_forward
+						local_forward = local_forward.normalized()
+
+						var local_up = Vector3.UP
+						var local_right = local_forward.cross(local_up).normalized()
+						local_forward = local_right.cross(local_up).normalized()
+						target_basis = Basis(local_right, local_up, local_forward)
+					else:
+						target_basis = Basis.IDENTITY
+
+					character.enter_vehicle(needs_reorientation, target_basis)
 
 					# Seamlessly set position (no clamping)
 					character.set_proxy_position(ship_local_pos, ship_local_velocity)
@@ -830,10 +855,21 @@ func _check_transitions() -> void:
 						# Adjust camera's base rotation by ship's yaw
 						dual_camera.base_rotation.y -= ship_yaw_in_container
 
-						# Don't set any orientation - character controller handles it
-						character.enter_vehicle(needs_reorientation, Basis.IDENTITY)
-						if not needs_reorientation:
-							character.is_transitioning = false
+						# Construct target basis for reorientation
+						var target_basis: Basis
+						if needs_reorientation:
+							var camera_forward = dual_camera.get_forward_direction()
+							var local_forward = ship_basis.inverse() * camera_forward
+							local_forward = local_forward.normalized()
+
+							var local_up = Vector3.UP
+							var local_right = local_forward.cross(local_up).normalized()
+							local_forward = local_right.cross(local_up).normalized()
+							target_basis = Basis(local_right, local_up, local_forward)
+						else:
+							target_basis = Basis.IDENTITY
+
+						character.enter_vehicle(needs_reorientation, target_basis)
 
 						# Seamlessly set position (no clamping)
 						character.set_proxy_position(vehicle_local_pos, vehicle_local_velocity)
@@ -855,8 +891,11 @@ func _check_transitions() -> void:
 						# Don't process the exit transition
 						break
 
-					# Exit container state
-					character.exit_container()
+					# Check if orientation transition is needed (for UP direction only)
+					var container_up = container.exterior_body.global_transform.basis.y
+					var world_up = Vector3.UP
+					var up_dot = container_up.dot(world_up)
+					var needs_reorientation = up_dot < 0.95
 
 					# Reverse the camera yaw adjustment we made on entry (same as vehicle)
 					# Get container's yaw rotation relative to world
@@ -865,6 +904,23 @@ func _check_transitions() -> void:
 
 					# Add back the container's yaw (reverse of subtraction on entry)
 					dual_camera.base_rotation.y += container_yaw
+
+					# Construct target basis for reorientation
+					var exit_basis: Basis
+					if needs_reorientation:
+						var camera_forward = dual_camera.get_forward_direction()
+						var local_forward = camera_forward
+						local_forward = local_forward.normalized()
+
+						var local_up = Vector3.UP
+						var local_right = local_forward.cross(local_up).normalized()
+						local_forward = local_right.cross(local_up).normalized()
+						exit_basis = Basis(local_right, local_up, local_forward)
+					else:
+						exit_basis = Basis.IDENTITY
+
+					# Exit container state with reorientation
+					character.exit_container(needs_reorientation, exit_basis)
 
 					# Transition camera up direction back to world up
 					if is_instance_valid(dual_camera):
@@ -1004,10 +1060,21 @@ func _check_transitions() -> void:
 				# Add back the ship's yaw (reverse of subtraction on entry)
 				dual_camera.base_rotation.y += ship_yaw_in_target
 
-				# Don't set any orientation - character controller handles it
-				character.exit_vehicle(Basis.IDENTITY)
-				if not needs_reorientation:
-					character.is_transitioning = false
+				# Construct target basis for reorientation
+				var exit_basis: Basis
+				if needs_reorientation:
+					var camera_forward = dual_camera.get_forward_direction()
+					var local_forward = target_basis.inverse() * camera_forward
+					local_forward = local_forward.normalized()
+
+					var local_up = Vector3.UP
+					var local_right = local_forward.cross(local_up).normalized()
+					local_forward = local_right.cross(local_up).normalized()
+					exit_basis = Basis(local_right, local_up, local_forward)
+				else:
+					exit_basis = Basis.IDENTITY
+
+				character.exit_vehicle(needs_reorientation, exit_basis)
 
 				# Try to deactivate vehicle space if no one left inside (UNIVERSAL HELPER)
 				var vehicle_space = vehicle.get_interior_space()
@@ -1035,22 +1102,19 @@ func _check_transitions() -> void:
 					# CRITICAL: Adjust camera orientation for ship->container transition
 					# Transition camera up direction from ship to container
 					if is_instance_valid(dual_camera) and target_container and target_container.exterior_body:
-						# Container's Y axis is the container's "up"
 						var container_up = target_container.exterior_body.global_transform.basis.y
 						dual_camera.set_target_up_direction(container_up)
-						# Don't adjust yaw - the orientation transition handles it
-						# (We subtracted PI when entering ship, so adding PI here would cancel out)
 						print("[SHIP EXIT] Transitioning up direction to container's Y axis")
 
 					# Activate and enter container interior space (UNIVERSAL HELPER)
 					var container_space = target_container.get_interior_space()
 					_activate_and_enter_interior_space(container_space)
 
+					# Reuse exit_basis already calculated above for ship->container reorientation
+					# needs_reorientation and target_basis were already set correctly above
 					# Use natural container position - seamless physics transition
-					# Don't push player, let them exit naturally with their momentum
-					# Pass container basis for smooth transition
-					var container_basis = target_container.exterior_body.global_transform.basis
-					character.enter_container(container_basis)
+					# Reorient if ship and container have different orientations
+					character.enter_container(needs_reorientation, exit_basis)
 					character.set_proxy_position(container_proxy_pos, container_velocity)
 					print("[SHIP EXIT] Character is_in_container: ", character.is_in_container)
 					print("[SHIP EXIT] Container position: ", container_proxy_pos, " velocity: ", container_velocity)
@@ -1130,16 +1194,37 @@ func _check_transitions() -> void:
 				var container_space = container.get_interior_space()
 				_activate_and_enter_interior_space(container_space)
 
-				# Adjust camera yaw to compensate for container's rotation (same as vehicle)
-				# Get container's yaw rotation relative to world
+				# Check if orientation transition is needed (for UP direction only)
 				var container_basis = container.exterior_body.global_transform.basis
+				var container_up = container_basis.y
+				var world_up = Vector3.UP
+				var up_dot = container_up.dot(world_up)
+				var needs_reorientation = up_dot < 0.95
+
+				# Adjust camera yaw to compensate for container's rotation (same as vehicle)
 				var container_forward_world = container_basis.z
 				var container_yaw = atan2(container_forward_world.x, container_forward_world.z)
 
 				# Adjust camera's base rotation by container's yaw
 				dual_camera.base_rotation.y -= container_yaw
 
-				character.enter_container()
+				# Construct target basis for reorientation (container's local UP)
+				var target_basis: Basis
+				if needs_reorientation:
+					# Get camera's forward direction and construct basis with container's UP
+					var camera_forward = dual_camera.get_forward_direction()
+					var local_forward = container_basis.inverse() * camera_forward
+					local_forward = local_forward.normalized()
+
+					# Construct basis using container's local UP (Y-axis in local space)
+					var local_up = Vector3.UP
+					var local_right = local_forward.cross(local_up).normalized()
+					local_forward = local_right.cross(local_up).normalized()
+					target_basis = Basis(local_right, local_up, local_forward)
+				else:
+					target_basis = Basis.IDENTITY
+
+				character.enter_container(needs_reorientation, target_basis)
 				character.set_proxy_position(entry_check["local_pos"], entry_check["local_velocity"])
 
 				print("[CONTAINER ENTRY] Entered ", container.name, " - is_in_container: ", character.is_in_container)

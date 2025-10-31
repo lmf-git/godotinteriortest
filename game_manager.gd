@@ -1142,6 +1142,8 @@ func _check_transitions() -> void:
 				character.enter_container()
 				character.set_proxy_position(entry_check["local_pos"], entry_check["local_velocity"])
 
+				print("[CONTAINER ENTRY] Entered ", container.name, " - is_in_container: ", character.is_in_container)
+
 				break  # Only enter one container at a time
 
 			# Check vehicle docking in BOTH containers - find which one ship is inside

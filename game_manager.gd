@@ -67,7 +67,7 @@ func _ready() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	# Create vehicle (spawn on ground, rotated to face player)
+	# Create vehicle (spawn on ground with opening facing player)
 	# Vehicle is now 9 units tall (3*3), so y=4.5 puts bottom at ground level
 	vehicle = Vehicle.new()
 	vehicle.physics_proxy = physics_proxy
@@ -78,10 +78,10 @@ func _ready() -> void:
 	# Create character OUTSIDE vehicle (starts in world space)
 	character = CharacterController.new()
 	character.physics_proxy = physics_proxy
-	character.position = Vector3(0, 2, -30)  # Spawn further back from origin
+	character.position = Vector3(0, 2, -30)  # Spawn behind ship, facing forward
 	add_child(character)
 
-	# Initialize character visual orientation to match starting space (world = upright)
+	# Initialize character visual orientation (world up)
 	character.initialize_visual_orientation(Basis.IDENTITY)
 
 	# Create SMALL vehicle container (5x ship = default)
@@ -109,6 +109,14 @@ func _ready() -> void:
 	dual_camera.character = character
 	dual_camera.vehicle = vehicle
 	dual_camera.vehicle_container = vehicle_container_small  # Use small container for camera
+
+	# Calculate initial facing towards nearest vehicle
+	# Player at z=-30, vehicle at z=50, so need to face +Z direction
+	var to_vehicle = (vehicle.position - character.position)
+	# atan2 for yaw: atan2(x, z) where default forward is -Z, so we need the angle to rotate
+	var initial_yaw = atan2(to_vehicle.x, to_vehicle.z) + PI  # Add PI because default is -Z
+	dual_camera.base_rotation.y = initial_yaw
+
 	add_child(dual_camera)
 
 	# Create stars
@@ -625,53 +633,55 @@ func _check_transitions() -> void:
 				# This prevents duplicate logic and allows the universal system to work
 				pass
 		else:
-			# Check if character walked into the vehicle entrance
+			# Check if character walked into the vehicle entrance (UNIVERSAL HELPER)
 			var char_world_pos = character.get_world_position()
 			var vehicle_transform = vehicle.exterior_body.global_transform
 
-			# Get relative position (vector from vehicle to character)
-			var relative_pos = char_world_pos - vehicle_transform.origin
+			# Define vehicle entry bounds (well before exit threshold of 18.0)
+			var entry_bounds = {
+				"x_min": -9.0, "x_max": 9.0,
+				"y_min": -4.5, "y_max": 4.5,
+				"z_min": 10.0, "z_max": 15.0  # Entry 10-15, exit 18+ gives 3+ unit buffer
+			}
 
-			# Transform relative position to vehicle local space
-			var local_pos = vehicle_transform.basis.inverse() * relative_pos
-
-			# Check if character is at the entrance (front opening)
-			# Ship is rotated 180°, so when approaching from behind (world -Z),
-			# the local Z is POSITIVE (ship's local -Z points backward in world +Z)
-			# Detect entrance while approaching floor edge (still within floor bounds)
-			var at_entrance = (
-				abs(local_pos.x) < 9.0 and
-				abs(local_pos.y) < 4.5 and
-				local_pos.z > 14.0 and local_pos.z < 15.0  # Approaching floor edge from outside
+			# Check entry using universal helper
+			var entry_check = _check_interior_entry(
+				char_world_pos,
+				vehicle_transform,
+				entry_bounds,
+				1.0,  # velocity_threshold
+				-1    # velocity_sign: negative Z to enter
 			)
 
-			if at_entrance and not character.is_in_container:
+			if entry_check["should_enter"] and not character.is_in_container:
 				# Player in world space entering undocked ship
-				# Keep world up direction (ship rotates freely in space, gravity is always down)
-				# Adjust yaw because ship entrance faces backward (ship rotated 180°)
-				if is_instance_valid(dual_camera):
-					dual_camera.set_target_up_direction(Vector3.UP)
-					# Add PI to yaw to compensate for ship's 180° rotation
-					dual_camera.base_rotation.y += PI
 
-				# Get current world velocity and transform to vehicle local space
-				var world_velocity = character.get_world_velocity()
-				var local_velocity = vehicle_transform.basis.inverse() * world_velocity
-
-				# Activate vehicle interior space if needed
+				# Activate and enter interior space (UNIVERSAL HELPER)
 				var vehicle_space = vehicle.get_interior_space()
-				if not PhysicsServer3D.space_is_active(vehicle_space):
-					PhysicsServer3D.space_set_active(vehicle_space, true)
+				_activate_and_enter_interior_space(vehicle_space)
 
-				# Set proxy_body's space to vehicle's interior space
-				PhysicsServer3D.body_set_space(character.proxy_body, vehicle_space)
+				# Check if orientation transition is needed (for UP direction only)
+				var ship_basis = vehicle.exterior_body.global_transform.basis
+				var ship_up = ship_basis.y
+				var world_up = Vector3.UP
+				var up_dot = ship_up.dot(world_up)
+				var needs_reorientation = up_dot < 0.95
+
+				# Adjust camera yaw to compensate for ship's rotation
+				# Get ship's yaw rotation relative to world
+				var ship_forward_world = ship_basis.z
+				var ship_yaw = atan2(ship_forward_world.x, ship_forward_world.z)
+
+				# Adjust camera's base rotation by ship's yaw
+				dual_camera.base_rotation.y -= ship_yaw
+
+				# Don't set any orientation - character controller handles it
+				character.enter_vehicle(needs_reorientation, Basis.IDENTITY)
+				if not needs_reorientation:
+					character.is_transitioning = false
 
 				# Seamlessly enter - use exact transformed position (no clamping)
-				# This matches the exit behavior which is perfectly seamless
-				character.enter_vehicle()
-				character.set_proxy_position(local_pos, local_velocity)
-
-				vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
+				character.set_proxy_position(entry_check["local_pos"], entry_check["local_velocity"])
 			elif character.is_in_container and vehicle.is_docked:
 				# Player in container space, check if can enter docked ship
 				# Get player position in container space
@@ -686,93 +696,60 @@ func _check_transitions() -> void:
 				var ship_local_pos = ship_dock_transform.basis.inverse() * relative_to_ship
 
 
-				print("[DOCKED SHIP ENTRY DEBUG] Player container pos: ", player_container_pos)
-				print("[DOCKED SHIP ENTRY DEBUG] Ship dock transform origin: ", ship_dock_transform.origin)
-				print("[DOCKED SHIP ENTRY DEBUG] Ship local pos: ", ship_local_pos)
-				print("[DOCKED SHIP ENTRY DEBUG] X check: ", abs(ship_local_pos.x), " < 9.0 = ", abs(ship_local_pos.x) < 9.0)
-				print("[DOCKED SHIP ENTRY DEBUG] Y check: ", abs(ship_local_pos.y), " < 4.5 = ", abs(ship_local_pos.y) < 4.5)
-				print("[DOCKED SHIP ENTRY DEBUG] Z check: ", ship_local_pos.z, " > 13.0 and < 14.5 = ", ship_local_pos.z > 13.0 and ship_local_pos.z < 14.5)
-				# Check if at ship entrance - narrower zone to prevent re-entry after exit
-				# Entry only when further inside: 13.0 < z < 14.5 (was 14.0 < z < 15.0)
-				# Exit still happens at z > 15.0, creating 0.5 unit buffer
+				# Check if at ship entrance zone (match undocked entry zone: 10-15)
 				var at_docked_ship_entrance = (
 					abs(ship_local_pos.x) < 9.0 and
 					abs(ship_local_pos.y) < 4.5 and
-					ship_local_pos.z > 13.0 and ship_local_pos.z < 14.5
+					ship_local_pos.z > 10.0 and ship_local_pos.z < 15.0  # Match undocked entry zone
 				)
 
-				if at_docked_ship_entrance:
+				# Get velocity in container space and transform to ship space
+				var container_velocity = character.get_proxy_velocity()
+				var ship_local_velocity = ship_dock_transform.basis.inverse() * container_velocity
+
+				# CRITICAL: Only enter if moving INTO interior (negative Z velocity in local space)
+				var moving_into_vehicle_from_container = ship_local_velocity.z < -1.0
+
+				if at_docked_ship_entrance and moving_into_vehicle_from_container:
 					# Player entering docked ship from container
-					# Seamless entry - no clamping (same as undocked ship entry)
-					# Entry zone: 14.0 < z < 15.0
-					# Exit threshold: z > 15.0
-					# No overlap, so no clamp needed
-					print("ENTERING DOCKED SHIP:")
-					print("  Player container pos: ", player_container_pos)
-					print("  Ship dock pos: ", ship_dock_transform.origin)
-					print("  Ship local pos: ", ship_local_pos)
 
-					# Get velocity in container space and transform to ship space
-					var container_velocity = character.get_proxy_velocity()
-					var ship_local_velocity = ship_dock_transform.basis.inverse() * container_velocity
-
-					# Find which container the ship is docked in (reuse for both camera and character)
+					# Find which container the ship is docked in
 					var docked_container = vehicle._get_docked_container()
-
-					# CRITICAL: Adjust camera orientation for container->ship transition
-					# Transition camera up direction to match ship interior
-					if is_instance_valid(dual_camera):
-						# Ship's Y axis in container space is the ship's "up"
-						var ship_up_in_container = ship_dock_transform.basis.y
-						if docked_container and docked_container.exterior_body:
-							# Transform to world space
-							var container_transform = docked_container.exterior_body.global_transform
-							var ship_up_world = container_transform.basis * ship_up_in_container
-							dual_camera.set_target_up_direction(ship_up_world)
-							# Don't adjust yaw - player's look direction maintained
-							# Ship and container are both in same coordinate system
-							print("ENTERING DOCKED SHIP: Setting up direction to ship's Y axis")
 
 					# CRITICAL: Exit container state before entering vehicle
 					# This ensures clean transition from container -> vehicle
 					character.exit_container()
 
-					# Activate vehicle interior space if needed
+					# Activate and enter vehicle interior space (UNIVERSAL HELPER)
 					var vehicle_space = vehicle.get_interior_space()
-					if not PhysicsServer3D.space_is_active(vehicle_space):
-						PhysicsServer3D.space_set_active(vehicle_space, true)
+					_activate_and_enter_interior_space(vehicle_space)
 
-					# Set proxy_body's space to vehicle's interior space
-					PhysicsServer3D.body_set_space(character.proxy_body, vehicle_space)
+					# Check if orientation transition is needed (for UP direction only)
+					var ship_basis = vehicle.exterior_body.global_transform.basis
+					var ship_up = ship_basis.y
+					var container_up = docked_container.exterior_body.global_transform.basis.y
+					var up_dot = ship_up.dot(container_up)
+					var needs_reorientation = up_dot < 0.95
 
-					# Construct target basis that preserves facing direction but uses ship's UP
-					# Get player's current forward direction (in world space)
-					var player_forward = character.character_visual.global_transform.basis.z
+					# Adjust camera yaw to compensate for ship's rotation relative to container
+					# Get ship's yaw rotation relative to container
+					var container_basis = docked_container.exterior_body.global_transform.basis
+					var ship_forward_container = container_basis.inverse() * ship_basis.z
+					var ship_yaw_in_container = atan2(ship_forward_container.x, ship_forward_container.z)
 
-					# Get ship's up direction (in world space)
-					var ship_up = vehicle.exterior_body.global_transform.basis.y
+					# Adjust camera's base rotation by ship's yaw
+					dual_camera.base_rotation.y -= ship_yaw_in_container
 
-					# Ensure forward is perpendicular to ship's up (project onto horizontal plane)
-					player_forward = player_forward - ship_up * player_forward.dot(ship_up)
-					player_forward = player_forward.normalized()
+					# Don't set any orientation - character controller handles it
+					character.enter_vehicle(needs_reorientation, Basis.IDENTITY)
+					if not needs_reorientation:
+						character.is_transitioning = false
 
-					# Construct right vector
-					var player_right = player_forward.cross(ship_up).normalized()
-
-					# Construct target basis preserving horizontal facing
-					var target_basis = Basis(player_right, ship_up, player_forward)
-
-					character.enter_vehicle(true, target_basis)
+					# Seamlessly set position (no clamping)
 					character.set_proxy_position(ship_local_pos, ship_local_velocity)
 
-					# Set BOTH cooldowns to prevent immediate exit
-					vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
-					container_transition_cooldown = TRANSITION_COOLDOWN_TIME
-
-					print("  Entered ship at position: ", ship_local_pos)
-
 	# Check container transition zones - seamless entry/exit for ALL containers
-	if character.is_in_container and container_transition_cooldown <= 0:
+	if character.is_in_container:
 		# Loop through all containers to find which one player is in
 		var containers = [vehicle_container_small, vehicle_container_large]
 		
@@ -786,17 +763,28 @@ func _check_transitions() -> void:
 			if player_space != container_space:
 				continue
 			
-			# Check if character walked outside container proxy bounds
+			# Get positions and velocity
 			var proxy_pos = character.get_proxy_position()
-			
-			# Calculate exit threshold based on container size
+			var proxy_velocity = character.get_proxy_velocity()
+
+			# Calculate exit threshold based on container size with hysteresis
 			var size_scale = 3.0 * container.size_multiplier
 			var half_length = 5.0 * size_scale
-			var exited_container = proxy_pos.z > half_length
-			
-			if exited_container:
-				# Get current proxy velocity
-				var proxy_velocity = character.get_proxy_velocity()
+
+			# Apply same hysteresis as vehicle:
+			# Vehicle: entry 10-15, exit 15.1 (0.1 past entry)
+			# Container: entry (half_length-10) to half_length, exit half_length+0.1
+			var exit_threshold = half_length + 0.1
+
+			# Check exit using universal helper
+			var should_exit = _check_interior_exit(
+				proxy_pos,
+				proxy_velocity,
+				exit_threshold,  # exit just past entry zone
+				1.0              # velocity_threshold
+			)
+
+			if should_exit:
 
 				# CRITICAL: Check if should enter vehicle that's docked inside BEFORE exiting container
 				# This prevents teleporting through world space
@@ -823,32 +811,31 @@ func _check_transitions() -> void:
 						# Exit container state
 						character.exit_container()
 
-						# Activate vehicle interior space if needed
+						# Activate and enter vehicle interior space (UNIVERSAL HELPER)
 						var vehicle_space = vehicle.get_interior_space()
-						if not PhysicsServer3D.space_is_active(vehicle_space):
-							PhysicsServer3D.space_set_active(vehicle_space, true)
+						_activate_and_enter_interior_space(vehicle_space)
 
-						# Set proxy_body's space to vehicle's interior space
-						PhysicsServer3D.body_set_space(character.proxy_body, vehicle_space)
+						# Check if orientation transition is needed (for UP direction only)
+						var ship_basis = vehicle.exterior_body.global_transform.basis
+						var ship_up = ship_basis.y
+						var container_up = container.exterior_body.global_transform.basis.y
+						var up_dot = ship_up.dot(container_up)
+						var needs_reorientation = up_dot < 0.95
 
-						# Construct target basis that preserves facing direction but uses ship's UP
-						# Get player's current forward direction (in world space)
-						var player_forward = character.character_visual.global_transform.basis.z
+						# Adjust camera yaw to compensate for ship's rotation relative to container
+						var container_basis = container.exterior_body.global_transform.basis
+						var ship_forward_container = container_basis.inverse() * ship_basis.z
+						var ship_yaw_in_container = atan2(ship_forward_container.x, ship_forward_container.z)
 
-						# Get ship's up direction (in world space)
-						var ship_up = vehicle.exterior_body.global_transform.basis.y
+						# Adjust camera's base rotation by ship's yaw
+						dual_camera.base_rotation.y -= ship_yaw_in_container
 
-						# Ensure forward is perpendicular to ship's up (project onto horizontal plane)
-						player_forward = player_forward - ship_up * player_forward.dot(ship_up)
-						player_forward = player_forward.normalized()
+						# Don't set any orientation - character controller handles it
+						character.enter_vehicle(needs_reorientation, Basis.IDENTITY)
+						if not needs_reorientation:
+							character.is_transitioning = false
 
-						# Construct right vector
-						var player_right = player_forward.cross(ship_up).normalized()
-
-						# Construct target basis preserving horizontal facing
-						var target_basis = Basis(player_right, ship_up, player_forward)
-
-						character.enter_vehicle(true, target_basis)
+						# Seamlessly set position (no clamping)
 						character.set_proxy_position(vehicle_local_pos, vehicle_local_velocity)
 
 				# Only exit to world if NOT entering docked ship
@@ -871,50 +858,45 @@ func _check_transitions() -> void:
 					# Exit container state
 					character.exit_container()
 
+					# Reverse the camera yaw adjustment we made on entry (same as vehicle)
+					# Get container's yaw rotation relative to world
+					var container_forward_world = container_transform.basis.z
+					var container_yaw = atan2(container_forward_world.x, container_forward_world.z)
+
+					# Add back the container's yaw (reverse of subtraction on entry)
+					dual_camera.base_rotation.y += container_yaw
+
 					# Transition camera up direction back to world up
 					if is_instance_valid(dual_camera):
 						dual_camera.set_target_up_direction(Vector3.UP)
-						dual_camera.base_rotation.y -= PI  # Reverse the entrance rotation
 
 					character.set_world_position(world_pos, world_velocity)
 
-				# Check if container space can be deactivated (no one left inside)
-				if not _is_anyone_in_container(container):
-					if PhysicsServer3D.space_is_active(container_space):
-						PhysicsServer3D.space_set_active(container_space, false)
-				
-				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
+				# Try to deactivate container space if no one left inside (UNIVERSAL HELPER)
+				_try_deactivate_interior_space(container_space, _is_anyone_in_container(container))
+
 				break
 
 
-	elif character.is_in_vehicle and container_transition_cooldown <= 0:
-		# Check if character (in ship interior) entered station/container zone
-		# This happens when ship is docked and player walks from ship into station
-		# Get ship proxy position
+	elif character.is_in_vehicle:
+		# Check if character (in ship interior) should exit vehicle
+		# Get ship proxy position and velocity
 		var ship_proxy_pos = character.get_proxy_position()
+		var proxy_velocity = character.get_proxy_velocity()
 
-		# Check if player walked OUT of the ship's front opening
-		# Ship interior extends from z=-15 to z=+15
-		# Only transition when player walks PAST the ship's front edge
-		var exited_ship_front = ship_proxy_pos.z > 15.0
+		# Check exit using universal helper (UNIVERSAL HELPER)
+		# Exit zone starts at z > 15.1 (right at floor edge)
+		# This creates hysteresis: enter at z=10-15, exit at z=15.1+
+		# Floor extends to z=15, exit immediately when past floor boundary
+		var should_exit_vehicle = _check_interior_exit(
+			ship_proxy_pos,
+			proxy_velocity,
+			15.1,  # exit_z_threshold (at floor edge to prevent falling through)
+			1.0    # velocity_threshold
+		)
 
-		# Debug logging - debounced (only when ship is docked)
-		if is_instance_valid(vehicle) and vehicle.is_docked and exited_ship_front:
-			_debounced_log("SHIP->STATION", "Player exited ship front", {
-				"ship_proxy_x": ship_proxy_pos.x,
-				"ship_proxy_y": ship_proxy_pos.y,
-				"ship_proxy_z": ship_proxy_pos.z
-			})
-
-		# Check if player walked out of docked ship - use spatial detection
-		if exited_ship_front and is_instance_valid(vehicle):
-			# Get current proxy velocity
-			var proxy_velocity = character.get_proxy_velocity()
-			
-			# HYSTERESIS: Only exit if moving FORWARD out of ship (+Z direction)
-			if proxy_velocity.z >= 0.5:
-				# Player is moving forward - process exit
-				
+		# Check if player walked out of vehicle - use velocity-based detection
+		if should_exit_vehicle and is_instance_valid(vehicle):
 				# Check if ship is docked in ANY container and player exit position is inside it
 				# DO THIS BEFORE exit_vehicle() to prevent one-frame gap
 				# Loop through all containers (universal system)
@@ -996,14 +978,40 @@ func _check_transitions() -> void:
 						world_velocity = vehicle_transform.basis * proxy_velocity
 
 				# Now exit vehicle (do this AFTER checking container, but BEFORE state change)
-				# Pass world up basis for smooth transition
-				character.exit_vehicle(Basis.IDENTITY)
+				# Check if ship's UP is significantly different from target space UP
+				var ship_up = vehicle.exterior_body.global_transform.basis.y
 
-				# Check if vehicle space can be deactivated (no one left inside)
-				if not _is_anyone_in_vehicle():
-						var vehicle_space = vehicle.get_interior_space()
-						if PhysicsServer3D.space_is_active(vehicle_space):
-							PhysicsServer3D.space_set_active(vehicle_space, false)
+				# Determine target UP based on whether entering container or world
+				var target_up: Vector3
+				var target_basis: Basis
+				if should_enter_container and target_container:
+					target_up = target_container.exterior_body.global_transform.basis.y
+					target_basis = target_container.exterior_body.global_transform.basis
+				else:
+					target_up = Vector3.UP
+					target_basis = Basis.IDENTITY
+
+				# Check if orientation transition is needed (for UP direction only)
+				var up_dot = target_up.dot(ship_up)
+				var needs_reorientation = up_dot < 0.95
+
+				# Reverse the camera yaw adjustment we made on entry
+				# Get ship's yaw rotation relative to target space
+				var ship_basis = vehicle.exterior_body.global_transform.basis
+				var ship_forward_target = target_basis.inverse() * ship_basis.z
+				var ship_yaw_in_target = atan2(ship_forward_target.x, ship_forward_target.z)
+
+				# Add back the ship's yaw (reverse of subtraction on entry)
+				dual_camera.base_rotation.y += ship_yaw_in_target
+
+				# Don't set any orientation - character controller handles it
+				character.exit_vehicle(Basis.IDENTITY)
+				if not needs_reorientation:
+					character.is_transitioning = false
+
+				# Try to deactivate vehicle space if no one left inside (UNIVERSAL HELPER)
+				var vehicle_space = vehicle.get_interior_space()
+				_try_deactivate_interior_space(vehicle_space, _is_anyone_in_vehicle())
 
 				print("[SHIP EXIT] should_enter_container: ", should_enter_container)
 				if target_container:
@@ -1034,13 +1042,9 @@ func _check_transitions() -> void:
 						# (We subtracted PI when entering ship, so adding PI here would cancel out)
 						print("[SHIP EXIT] Transitioning up direction to container's Y axis")
 
-						# Activate container space if needed
+					# Activate and enter container interior space (UNIVERSAL HELPER)
 					var container_space = target_container.get_interior_space()
-					if not PhysicsServer3D.space_is_active(container_space):
-						PhysicsServer3D.space_set_active(container_space, true)
-
-					# Set proxy_body's space to container's interior space
-					PhysicsServer3D.body_set_space(character.proxy_body, container_space)
+					_activate_and_enter_interior_space(container_space)
 
 					# Use natural container position - seamless physics transition
 					# Don't push player, let them exit naturally with their momentum
@@ -1050,16 +1054,12 @@ func _check_transitions() -> void:
 					character.set_proxy_position(container_proxy_pos, container_velocity)
 					print("[SHIP EXIT] Character is_in_container: ", character.is_in_container)
 					print("[SHIP EXIT] Container position: ", container_proxy_pos, " velocity: ", container_velocity)
-
-					# Set BOTH cooldowns to prevent immediate re-entry
-					vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
-					container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 				else:
 					# Exit position is outside container OR ship not docked - exit to world space
 
-					# Get forward direction in world space (ship's +Z is forward)
-					var vehicle_transform = vehicle.exterior_body.global_transform
-					var exit_forward = vehicle_transform.basis.z
+					# Get forward direction in world space (interior's +Z is forward)
+					var exit_transform = vehicle.exterior_body.global_transform
+					var exit_forward = exit_transform.basis.z
 
 					# CRITICAL: Check if exit position is blocked in exterior world
 					if _is_exit_position_blocked(world_pos, Vector3.UP, exit_forward):
@@ -1068,23 +1068,17 @@ func _check_transitions() -> void:
 						# Don't process the exit
 					else:
 						# Exit is clear - proceed
-						# Transition camera up direction back to world up
-						# Subtract PI from yaw to reverse the entrance rotation
 						if is_instance_valid(dual_camera):
 							dual_camera.set_target_up_direction(Vector3.UP)
-							# Subtract PI to reverse the entrance yaw adjustment
-							dual_camera.base_rotation.y -= PI
 
 						character.set_world_position(world_pos, world_velocity)
 
 						# Set character visual orientation to world up
 
-						# Set vehicle cooldown for ship→world exit
-						vehicle_transition_cooldown = TRANSITION_COOLDOWN_TIME
 			# End velocity check for ship exit
 
 	else:
-		# Character in world space - check if entering ANY container from outside
+		# Character in world space - check if entering ANY container from outside (UNIVERSAL HELPER)
 		# Loop through all containers (same pattern as vehicle docking)
 		var containers = [vehicle_container_small, vehicle_container_large]
 
@@ -1095,77 +1089,59 @@ func _check_transitions() -> void:
 			var char_world_pos = character.get_world_position()
 			var container_transform = container.exterior_body.global_transform
 
-			# Get relative position (vector from container to character)
-			var relative_pos = char_world_pos - container_transform.origin
-
-			# Transform relative position to container local space
-			var local_pos = container_transform.basis.inverse() * relative_pos
-
 			# Calculate entrance detection zone based on container size
-			# Ship detection: 14-15 out of 15 (1 unit inside)
-			# Container detection: proportional (1-2 units inside)
 			var size_scale = 3.0 * container.size_multiplier
-			var half_width = 3.0 * size_scale  # Width is 6 * size_scale
-			var half_height = 1.5 * size_scale  # Height is 3 * size_scale
-			var half_length = 5.0 * size_scale  # Length is 10 * size_scale
-			# Calculate floor level for entrance detection - must be at/above floor
-			# Floor top is at -1.5 * size_scale + 0.1 (interior proxy collider top surface)
+			var half_width = 3.0 * size_scale
+			var half_height = 1.5 * size_scale
+			var half_length = 5.0 * size_scale
 			var floor_top_y = -1.5 * size_scale + 0.1
 
+			# Define container entry bounds (match vehicle entry proportion)
+			# Vehicle: 15 unit floor, entry at 10-15 (5 units, 33% of floor length)
+			# Container: 75 unit floor, entry at 65-75 (10 units, 13% of floor length)
+			var entry_bounds = {
+				"x_min": -half_width, "x_max": half_width,
+				"y_min": floor_top_y - 1.0, "y_max": half_height + 1.0,
+				"z_min": half_length - 10.0, "z_max": half_length  # Wider entry zone: 10 units
+			}
 
-			var at_container_entrance = (
-			abs(local_pos.x) < half_width and
-			local_pos.y > floor_top_y - 1.0 and local_pos.y < (half_height + 1.0) and  # Must be at/above floor level
-			local_pos.z > (half_length - 2.0) and local_pos.z < (half_length - 1.0)  # 1-2 units inside
+			# Check entry using universal helper
+			# Container is rotated 180° like ship, so use negative Z to enter
+			var entry_check = _check_interior_entry(
+				char_world_pos,
+				container_transform,
+				entry_bounds,
+				1.0,  # velocity_threshold
+				-1    # velocity_sign: negative Z to enter (rotated 180°)
 			)
 
 			# Debug: show when near container entrance
-			if abs(local_pos.z - half_length) < 5.0 and abs(local_pos.x) < half_width:
+			if abs(entry_check["local_pos"].z - half_length) < 15.0 and abs(entry_check["local_pos"].x) < half_width:
 				print("[CONTAINER ENTRANCE DEBUG] ", container.name)
-				print("  local_pos: ", local_pos)
-				print("  half_length: ", half_length, " z range: ", half_length - 2.0, " to ", half_length - 1.0)
+				print("  local_pos: ", entry_check["local_pos"])
+				print("  half_length: ", half_length, " z range: ", half_length - 10.0, " to ", half_length)
 				print("  floor_top_y: ", floor_top_y, " y range: ", floor_top_y - 1.0, " to ", half_height + 1.0)
-				print("  at_entrance: ", at_container_entrance)
+				print("  at_entrance: ", entry_check["should_enter"])
 				print("  in_world: ", not character.is_in_container and not character.is_in_vehicle)
 
-
-			# CRITICAL: Only trigger if player is in world space (not in vehicle or container)
-			# When player is inside docked ship, they stay in vehicle interior until they walk out
-			if at_container_entrance and not character.is_in_container and not character.is_in_vehicle:
-				# Transition camera up direction to match container
-				if is_instance_valid(dual_camera):
-					var container_up = container_transform.basis.y
-					dual_camera.set_target_up_direction(container_up)
-					dual_camera.base_rotation.y += PI  # Flip yaw for 180° entrance
-
-				# Get current world velocity and transform to container local space
-				var world_velocity = character.get_world_velocity()
-				var local_velocity = container_transform.basis.inverse() * world_velocity
-
-				# Activate container space if needed
+			# Only trigger if player is in world space AND should enter
+			if entry_check["should_enter"] and not character.is_in_container and not character.is_in_vehicle:
+				# Activate and enter interior space (UNIVERSAL HELPER)
 				var container_space = container.get_interior_space()
-				if not PhysicsServer3D.space_is_active(container_space):
-					PhysicsServer3D.space_set_active(container_space, true)
+				_activate_and_enter_interior_space(container_space)
 
-				# Set proxy_body's space to container's interior space
-				PhysicsServer3D.body_set_space(character.proxy_body, container_space)
+				# Adjust camera yaw to compensate for container's rotation (same as vehicle)
+				# Get container's yaw rotation relative to world
+				var container_basis = container.exterior_body.global_transform.basis
+				var container_forward_world = container_basis.z
+				var container_yaw = atan2(container_forward_world.x, container_forward_world.z)
 
-				# Seamlessly enter - use exact transformed position with safety Y minimum
-				# Prevent falling through floor while keeping seamless horizontal transition
-				var container_floor_y = -1.5 * size_scale + 0.1  # Floor flush with walls
-				var player_min_y = container_floor_y + 0.7  # Player capsule center minimum (on floor)
-
-				var safe_pos = Vector3(
-					local_pos.x,
-					max(local_pos.y, player_min_y),  # Only clamp if below floor
-					local_pos.z
-				)
+				# Adjust camera's base rotation by container's yaw
+				dual_camera.base_rotation.y -= container_yaw
 
 				character.enter_container()
-				character.set_proxy_position(safe_pos, local_velocity)
+				character.set_proxy_position(entry_check["local_pos"], entry_check["local_velocity"])
 
-
-				container_transition_cooldown = TRANSITION_COOLDOWN_TIME
 				break  # Only enter one container at a time
 
 			# Check vehicle docking in BOTH containers - find which one ship is inside
@@ -1273,11 +1249,9 @@ func _check_transitions() -> void:
 					})
 					vehicle.set_docked(false, container)
 
-					# Check if container space can be deactivated (no one left inside after undocking)
-					if not _is_anyone_in_container(container):
-						var container_space = container.get_interior_space()
-						if PhysicsServer3D.space_is_active(container_space):
-							PhysicsServer3D.space_set_active(container_space, false)
+					# Try to deactivate container space if no one left inside (UNIVERSAL HELPER)
+					var container_space = container.get_interior_space()
+					_try_deactivate_interior_space(container_space, _is_anyone_in_container(container))
 
 					break
 
@@ -1315,6 +1289,117 @@ func _check_transitions() -> void:
 			vehicle_container_small.set_docked(false, vehicle_container_large)
 
 # Physics space optimization: spaces activate on-demand and deactivate when empty or all bodies are sleeping
+
+## ============================================================================
+## UNIVERSAL INTERIOR HELPER FUNCTIONS
+## These work for ANY interior type (vehicles, containers, or future additions)
+## ============================================================================
+
+## Activate an interior physics space and assign character's proxy body to it
+func _activate_and_enter_interior_space(interior_space: RID) -> void:
+	if not PhysicsServer3D.space_is_active(interior_space):
+		PhysicsServer3D.space_set_active(interior_space, true)
+	PhysicsServer3D.body_set_space(character.proxy_body, interior_space)
+
+## Deactivate an interior physics space if no one is inside
+func _try_deactivate_interior_space(interior_space: RID, is_anyone_inside: bool) -> void:
+	if not is_anyone_inside and PhysicsServer3D.space_is_active(interior_space):
+		PhysicsServer3D.space_set_active(interior_space, false)
+
+## Check if character is at an interior entry zone with correct velocity
+func _check_interior_entry(
+	char_world_pos: Vector3,
+	interior_transform: Transform3D,
+	entry_bounds: Dictionary,  # {x_min, x_max, y_min, y_max, z_min, z_max}
+	velocity_threshold: float,
+	velocity_sign: int  # +1 for positive Z, -1 for negative Z
+) -> Dictionary:
+	"""
+	Universal entry detection for any interior.
+	Returns: {should_enter: bool, local_pos: Vector3, local_velocity: Vector3}
+	"""
+	# Transform to interior local space
+	var relative_pos = char_world_pos - interior_transform.origin
+	var local_pos = interior_transform.basis.inverse() * relative_pos
+
+	# Check bounds
+	var at_entrance = (
+		local_pos.x > entry_bounds["x_min"] and local_pos.x < entry_bounds["x_max"] and
+		local_pos.y > entry_bounds["y_min"] and local_pos.y < entry_bounds["y_max"] and
+		local_pos.z > entry_bounds["z_min"] and local_pos.z < entry_bounds["z_max"]
+	)
+
+	# Check velocity direction
+	var world_velocity = character.get_world_velocity()
+	var local_velocity = interior_transform.basis.inverse() * world_velocity
+	var moving_into_interior = (local_velocity.z * velocity_sign) > velocity_threshold
+
+	return {
+		"should_enter": at_entrance and moving_into_interior,
+		"local_pos": local_pos,
+		"local_velocity": local_velocity
+	}
+
+## Check if character should exit from interior
+func _check_interior_exit(
+	proxy_pos: Vector3,
+	proxy_velocity: Vector3,
+	exit_z_threshold: float,
+	velocity_threshold: float
+) -> bool:
+	"""
+	Universal exit detection for any interior.
+	Returns: true if should exit
+	"""
+	var at_exit_zone = proxy_pos.z > exit_z_threshold
+	var moving_out_of_interior = proxy_velocity.z > velocity_threshold
+	return at_exit_zone and moving_out_of_interior
+
+## Construct orientation basis preserving facing direction
+func _construct_orientation_basis_preserving_facing(
+	current_visual_forward: Vector3,
+	target_up: Vector3,
+	source_up: Vector3
+) -> Dictionary:
+	"""
+	Constructs target orientation basis preserving horizontal facing direction.
+	Only changes the UP direction, maintains the forward facing direction.
+	Returns: {basis: Basis, should_transition: bool}
+	"""
+	# Check if UP directions differ significantly
+	var up_dot = target_up.dot(source_up)
+	var should_transition = up_dot < 0.95
+
+	# Project current forward onto plane perpendicular to target UP
+	# This preserves the horizontal facing direction
+	var player_forward = current_visual_forward - target_up * current_visual_forward.dot(target_up)
+
+	if player_forward.length_squared() < 0.001:
+		# Player was looking straight up/down - use a default forward
+		# Use world forward projected onto target plane
+		var default_forward = Vector3(0, 0, 1)
+		player_forward = default_forward - target_up * default_forward.dot(target_up)
+		if player_forward.length_squared() < 0.001:
+			# Target up is aligned with world forward, use world right instead
+			player_forward = Vector3(1, 0, 0)
+		else:
+			player_forward = player_forward.normalized()
+	else:
+		player_forward = player_forward.normalized()
+
+	# Construct right vector using cross product
+	var player_right = player_forward.cross(target_up).normalized()
+
+	# CRITICAL: Recalculate forward from right and up to ensure proper orthogonality
+	# This fixes potential orientation issues from the projection
+	var corrected_forward = player_right.cross(target_up).normalized()
+
+	var target_basis = Basis(player_right, target_up, corrected_forward).orthonormalized()
+
+	return {
+		"basis": target_basis,
+		"should_transition": should_transition
+	}
 
 func _check_space_sleep_optimization() -> void:
 	# Check if physics spaces can be deactivated due to inactivity (sleeping bodies)

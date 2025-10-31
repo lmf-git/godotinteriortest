@@ -98,7 +98,7 @@ func _create_container_exterior() -> void:
 	exterior_body = RigidBody3D.new()
 	exterior_body.name = "ExteriorBody"
 	exterior_body.mass = 50000.0 * size_multiplier  # Heavy but controllable - 50x ship mass (1000 kg)
-	exterior_body.gravity_scale = 1.0  # Enable gravity so it sits on ground
+	exterior_body.gravity_scale = 0.0  # No gravity - this is a space station/container
 	exterior_body.linear_damp = 0.5  # Low damping for responsive controls
 	exterior_body.angular_damp = 0.5
 	add_child(exterior_body)

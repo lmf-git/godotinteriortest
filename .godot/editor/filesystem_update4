@@ -1,3 +1,4 @@
 res://character_controller.gd
 res://game_manager.gd
 res://dual_camera_view.gd
+res://vehicle_container.gd

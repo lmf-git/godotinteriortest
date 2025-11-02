@@ -20,6 +20,7 @@ var container_interior_space: RID  # This container's OWN proxy interior space
 var dock_proxy_body: RID  # This container's body when docked in a larger container
 var transition_zone: Area3D  # Zone where vehicles/players can transition to interior
 var is_docked: bool = false  # Is this container docked in a larger container?
+var docked_in_container: VehicleContainer = null  # Reference to parent container when docked
 
 func _ready() -> void:
 	# Calculate unique Y offset based on size to avoid proxy space collisions
@@ -292,9 +293,9 @@ func _create_container_dock_proxy() -> void:
 	PhysicsServer3D.body_add_shape(dock_proxy_body, container_shape)
 	PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), Vector3.ZERO))
 
-	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_GRAVITY_SCALE, 1.0)
-	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_LINEAR_DAMP, 5.0)
-	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_ANGULAR_DAMP, 5.0)
+	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_GRAVITY_SCALE, 1.0)  # Normal gravity
+	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_LINEAR_DAMP, 0.1)  # Minimal damping - same as free flight
+	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_ANGULAR_DAMP, 0.1)  # Minimal damping for rotation
 	PhysicsServer3D.body_set_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_MASS, 50000.0 * size_multiplier)
 
 func _create_transition_zone() -> void:
@@ -317,102 +318,186 @@ func _create_transition_zone() -> void:
 	transition_zone.monitorable = true
 
 func apply_rotation(axis: Vector3, torque: float) -> void:
-	if exterior_body:
+	# CRITICAL: Apply torque to dock_proxy_body if docked, otherwise exterior_body
+	if is_docked and dock_proxy_body.is_valid():
+		PhysicsServer3D.body_apply_torque(dock_proxy_body, axis * torque)
+	elif exterior_body:
 		exterior_body.apply_torque(axis * torque)
 
 func apply_thrust(direction: Vector3, force: float) -> void:
-	if exterior_body:
+	# CRITICAL: Apply force to dock_proxy_body if docked, otherwise exterior_body
+	if is_docked and dock_proxy_body.is_valid():
+		PhysicsServer3D.body_apply_central_force(dock_proxy_body, direction * force)
+	elif exterior_body:
 		exterior_body.apply_central_force(direction * force)
 
 func get_interior_space() -> RID:
 	# Return this container's interior physics space
 	return container_interior_space
 
+func _get_docked_container() -> VehicleContainer:
+	# Return the container this container is docked in (if any)
+	return docked_in_container
+
 func set_docked(docked: bool, parent_container: VehicleContainer = null) -> void:
 	if docked and not is_docked:
 		# Container entering dock in parent container
 		if exterior_body and dock_proxy_body.is_valid() and parent_container:
-			# CRITICAL: Set dock_proxy_body's space to parent container's interior space
+			# Store reference to parent container
+			docked_in_container = parent_container
+
+			# CRITICAL: Use recursive transform for parent in case it's also docked
+			var parent_world_transform = VehicleContainer.get_world_transform(parent_container)
+			var world_transform = exterior_body.global_transform
+
+			# Transform world position to parent container's local space (preserve current position)
+			var relative_transform = parent_world_transform.inverse() * world_transform
+
+			# Safety check: Clamp Y position to prevent spawning below floor
+			# Parent floor is at y = -1.4 * parent_size_scale
+			# Ensure container spawns with bottom at least 0.5 units above floor
+			var parent_size = 3.0 * parent_container.size_multiplier
+			var parent_floor_y = -1.4 * parent_size
+			var this_floor_offset = -1.4 * 3.0 * size_multiplier
+			var min_y = parent_floor_y - this_floor_offset + 0.5  # Container bottom 0.5 units above parent floor
+
+			if relative_transform.origin.y < min_y:
+				relative_transform.origin.y = min_y
+
+			var proxy_transform = relative_transform
+
+			# CRITICAL: Preserve velocity for seamless docking (like ship docking)
+			# Transform from world space to parent container's local space
+			var world_velocity = exterior_body.linear_velocity
+			var local_velocity = parent_world_transform.basis.inverse() * world_velocity
+
+			# Moderate clamping to prevent extreme velocities
+			var clamped_velocity = Vector3(
+				clamp(local_velocity.x, -15.0, 15.0),
+				clamp(local_velocity.y, -8.0, 8.0),
+				clamp(local_velocity.z, -15.0, 15.0)
+			)
+			# Light damping (keep 70% of velocity) for smooth transition
+			clamped_velocity *= 0.7
+
+			# Preserve angular velocity with light damping for stability
+			var world_angvel = exterior_body.angular_velocity
+			var local_angvel = parent_world_transform.basis.inverse() * world_angvel
+
+			# CRITICAL: Set transform and velocities BEFORE adding to space
+			# This prevents spawning at (0,0,0) and teleporting
+			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, proxy_transform)
+			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_SLEEPING, false)
+			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, clamped_velocity)
+			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, local_angvel * 0.7)
+
+			# CRITICAL: NOW add to space AFTER all state is configured
 			var parent_interior_space = parent_container.get_interior_space()
 			if not parent_interior_space.is_valid():
 				push_error("Parent container interior space not valid!")
 				return
+
+			# Activate parent container space if not already active
+			if not PhysicsServer3D.space_is_active(parent_interior_space):
+				PhysicsServer3D.space_set_active(parent_interior_space, true)
+
 			PhysicsServer3D.body_set_space(dock_proxy_body, parent_interior_space)
 
-			var parent_transform = parent_container.exterior_body.global_transform
-			var world_transform = exterior_body.global_transform
-
-			# Transform world position to parent container's local space (relative coordinates)
-			var relative_transform = parent_transform.inverse() * world_transform
-
-			# Place container in parent's interior space at floor level
-			# Parent floor is at y = -1.4 * parent_size_scale
-			# This container floor is at y = this_center + (-1.4 * this_size_scale)
-			var parent_size = 3.0 * parent_container.size_multiplier
-			var parent_floor_y = -1.4 * parent_size
-			var this_floor_offset = -1.4 * 3.0 * size_multiplier
-			var this_center_y = parent_floor_y - this_floor_offset + 0.1  # 0.1 units above parent floor
-			var proxy_pos = Vector3(
-				relative_transform.origin.x,
-				this_center_y,
-				relative_transform.origin.z
-			)
-			var proxy_transform = Transform3D(relative_transform.basis, proxy_pos)
-
-			# Set dock proxy body to this position in parent's interior space
+			# CRITICAL: State might be reset when adding to space - set it AGAIN after adding
 			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, proxy_transform)
+			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, clamped_velocity)
+			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, local_angvel * 0.7)
+			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_SLEEPING, false)
 
-			# Zero out velocities
-			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, Vector3.ZERO)
-			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, Vector3.ZERO)
+			# Make exterior_body kinematic (not frozen) - it becomes a visual follower
+			# Similar to how ship's exterior_body follows dock_proxy_body when docked
+			exterior_body.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+			exterior_body.freeze = true  # Enable kinematic mode
+
+			# CRITICAL: Disable collision on exterior_body to prevent physics conflicts
+			# Only dock_proxy_body should have active physics when docked
+			exterior_body.collision_layer = 0
+			exterior_body.collision_mask = 0
 	elif not docked and is_docked:
 		# Container leaving dock - transfer position from parent's interior space to world
 		if exterior_body and dock_proxy_body.is_valid() and parent_container:
-			var parent_transform = parent_container.exterior_body.global_transform
+			# CRITICAL: Use recursive transform for parent in case it's also docked
+			var parent_world_transform = VehicleContainer.get_world_transform(parent_container)
 			var dock_transform = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
 			# Transform dock proxy position (in parent's interior space) to world space
-			var world_transform = parent_transform * dock_transform
+			var world_transform = parent_world_transform * dock_transform
 
 			# Set exterior body to this world position
 			exterior_body.global_transform = world_transform
 
-			# Copy velocity from parent's interior space to world space
+			# CRITICAL: Zero velocities BEFORE unfreezing to clear phantom velocities from kinematic mode
+			exterior_body.linear_velocity = Vector3.ZERO
+			exterior_body.angular_velocity = Vector3.ZERO
+
+			# CRITICAL: Restore exterior_body to rigid mode after undocking
+			# Exterior_body is now the active physics body again
+			exterior_body.freeze = false  # Disable kinematic
+
+			# Re-enable collision on exterior_body
+			exterior_body.collision_layer = 1
+			exterior_body.collision_mask = 1
+
+			# NOW set correct velocities from parent's interior space to world space
 			var local_velocity = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY)
-			var world_velocity = parent_transform.basis * local_velocity
+			var world_velocity = parent_world_transform.basis * local_velocity
 			exterior_body.linear_velocity = world_velocity
 
 			# Copy angular velocity
 			var local_angvel = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY)
-			var world_angvel = parent_transform.basis * local_angvel
+			var world_angvel = parent_world_transform.basis * local_angvel
 			exterior_body.angular_velocity = world_angvel
 
 			# Remove dock_proxy_body from parent's interior space
 			PhysicsServer3D.body_set_space(dock_proxy_body, RID())
 
+			# Clear reference to parent container
+			docked_in_container = null
+
 	is_docked = docked
+
+static func get_world_transform(container: VehicleContainer) -> Transform3D:
+	# Recursively calculate the world transform of a container
+	# Handles arbitrary nesting depth (container in container in container...)
+	if not container or not container.exterior_body:
+		return Transform3D.IDENTITY
+
+	if not container.is_docked or not container.dock_proxy_body.is_valid():
+		# Container not docked - use exterior body directly
+		return container.exterior_body.global_transform
+
+	# Container is docked - calculate through parent
+	var dock_transform = PhysicsServer3D.body_get_state(container.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+	var parent_container = container._get_docked_container()
+
+	if parent_container and parent_container.exterior_body:
+		# Recursively get parent's world transform
+		var parent_world_transform = get_world_transform(parent_container)
+		# Combine parent's world transform with this container's dock transform
+		var result = parent_world_transform * dock_transform
+		return result
+	else:
+		# Fallback if parent not found
+		return container.exterior_body.global_transform
 
 func _process(_delta: float) -> void:
 	# Update exterior body visual based on docked state
 	# This is needed for nested containers - the small container's exterior must follow its dock_proxy_body
 	if is_docked and dock_proxy_body.is_valid() and exterior_body:
-		# Container is docked: find parent container and transform position
-		var game_manager = get_parent()
-		if game_manager:
-			# Find the parent container (the one we're docked in)
-			for child in game_manager.get_children():
-				if child is VehicleContainer and child != self:
-					var parent_container = child as VehicleContainer
-					# Check if we're docked in this parent (larger container)
-					# For now, assume small docks in large if both exist
-					if parent_container.size_multiplier > size_multiplier:
-						var proxy_transform: Transform3D = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
-						var parent_transform = parent_container.exterior_body.global_transform
-
-						# Transform from parent's interior space to world space
-						var world_transform = parent_transform * proxy_transform
-						exterior_body.global_transform = world_transform
-						break
+		# Container is docked: use recursive transform through parent chain
+		var parent_container = _get_docked_container()
+		if parent_container:
+			var proxy_transform: Transform3D = PhysicsServer3D.body_get_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+			# Use recursive helper to get parent's world transform (handles nested containers)
+			var parent_world_transform = VehicleContainer.get_world_transform(parent_container)
+			# Transform from parent's interior space to world space
+			var world_transform = parent_world_transform * proxy_transform
+			exterior_body.global_transform = world_transform
 	elif exterior_body:
 		# Container in world space: exterior_body controls its own position
 		pass

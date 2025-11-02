@@ -283,6 +283,24 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 
 	proxy_interior_visuals.add_child(vehicle_proxy_visual)
 
+	# Create docked container proxy visual (will be updated to follow docked container position)
+	var container_proxy_visual = MeshInstance3D.new()
+	container_proxy_visual.name = "ContainerProxyVisual"
+	var container_box = BoxMesh.new()
+	# Initial size for 5x container - will be dynamically resized
+	# Full exterior dimensions: width=6*scale, height=3*scale, length=10*scale
+	container_box.size = Vector3(90, 45, 150)  # 6*15, 3*15, 10*15 for size_multiplier=5
+	container_proxy_visual.mesh = container_box
+
+	var container_material = StandardMaterial3D.new()
+	container_material.albedo_color = Color(1.0, 0.5, 0.2)  # Orange for container
+	container_material.emission_enabled = true
+	container_material.emission = Color(0.5, 0.2, 0.1)
+	container_material.emission_energy_multiplier = 1.0
+	container_proxy_visual.material_override = container_material
+
+	proxy_interior_visuals.add_child(container_proxy_visual)
+
 func _setup_cameras() -> void:
 	# Main FPS camera (interior proxy view) - uses default viewport
 	main_camera = Camera3D.new()
@@ -630,14 +648,13 @@ func _update_external_camera() -> void:
 		return
 
 	# Camera is in the proxy interior space (stable coordinates)
-	# Position camera at back of ship interior, elevated
-	var size_scale = 3.0
-	var cam_pos = Vector3(0, 3, -12 * size_scale / 3.0)  # Back of interior, elevated
+	# Position camera at back of ship interior, elevated and further back for better view
+	var cam_pos = Vector3(0, 8, -20)  # Zoomed out: higher and further back
 
 	external_camera.position = cam_pos
 
-	# Look toward the front opening
-	var look_target = Vector3(0, 0, 12 * size_scale / 3.0)  # Front entrance
+	# Look toward the center/front of the interior
+	var look_target = Vector3(0, 0, 0)  # Center of interior
 	external_camera.look_at(look_target, Vector3.UP)
 
 
@@ -684,18 +701,19 @@ func _update_dock_interior_camera() -> void:
 
 	# Use the outermost container's size for camera positioning
 	var size_scale = 3.0 * outermost_container.size_multiplier
-	
-	# Position camera at back of container interior, elevated to see contents
+
+	# Position camera at back of container interior, elevated but not too high
 	# Floor is at y = -1.5 * size_scale + 0.1
 	var floor_y = -1.5 * size_scale + 0.1
-	var cam_y = floor_y + 4.0 * size_scale  # Camera elevated above floor
-	var cam_z = -3.5 * size_scale  # Camera at back of container
+	# Scale camera distance with container size for consistent view
+	var cam_y = floor_y + 4.0 * size_scale  # Lower angle (was 8.0)
+	var cam_z = -5.5 * size_scale  # Same distance back
 	var cam_pos = Vector3(0, cam_y, cam_z)
 
 	dock_interior_camera.position = cam_pos
 
-	# Look at the center of the docking area
-	var look_target = Vector3(0, floor_y + 1.5 * size_scale, 0)  # Center height
+	# Look at slightly above floor level for better view
+	var look_target = Vector3(0, floor_y + 1.5 * size_scale, 0)  # Lower target (was 2.5)
 	dock_interior_camera.look_at(look_target, Vector3.UP)
 
 func get_forward_direction() -> Vector3:
@@ -754,22 +772,21 @@ func _update_proxy_character_visuals() -> void:
 			station_char_visual.visible = show_character
 
 			if character.is_in_container:
+				# Character is directly in container - use proxy position directly
 				station_char_visual.position = proxy_pos
 			elif character.is_in_vehicle and is_instance_valid(vehicle) and vehicle.is_docked:
-				# Character is in docked vehicle - show in vehicle's dock position
-				# Transform proxy pos through vehicle to station space
-				if vehicle.exterior_body:
-					var vehicle_world_pos = vehicle.exterior_body.global_position
-					var vehicle_basis = vehicle.exterior_body.global_transform.basis
-					var container_pos = vehicle_container.exterior_body.global_position
-					var container_basis = vehicle_container.exterior_body.global_transform.basis
+				# Character is in docked vehicle - transform from ship space to container space
+				# CRITICAL: Use physics space transforms, not world transforms
+				# proxy_pos is in ship's interior space
+				# We need to transform to container's interior space
+				if vehicle.dock_proxy_body.is_valid():
+					# Get ship's dock proxy transform (ship's position in container's interior space)
+					var ship_dock_transform: Transform3D = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-					# Character world position
-					var char_world_pos = vehicle_world_pos + vehicle_basis * proxy_pos
-
-					# Transform to container local space
-					var relative_pos = char_world_pos - container_pos
-					var container_local_pos = container_basis.inverse() * relative_pos
+					# Transform character position from ship interior space to container interior space
+					# Character proxy_pos is relative to ship's interior origin
+					# Ship's dock_proxy_body position is in container's interior space
+					var container_local_pos = ship_dock_transform.origin + ship_dock_transform.basis * proxy_pos
 
 					station_char_visual.position = container_local_pos
 
@@ -789,6 +806,38 @@ func _update_proxy_character_visuals() -> void:
 
 				station_vehicle_visual.position = station_proxy_pos
 				station_vehicle_visual.transform.basis = dock_transform.basis
+
+		# Update docked container visual in station interior viewport
+		var station_container_visual = dock_interior_viewport.get_node_or_null("StationProxyInteriorVisuals/ContainerProxyVisual")
+		if station_container_visual:
+			# Show container if small container is docked in large container
+			# Need to check all containers to find which one is docked
+			var found_docked_container = false
+
+			# Get game manager to access all containers
+			var game_manager = get_parent()
+			if game_manager:
+				for child in game_manager.get_children():
+					if child is VehicleContainer:
+						var container = child as VehicleContainer
+						if container.is_docked and container.dock_proxy_body.is_valid():
+							# This container is docked - show it in PiP
+							found_docked_container = true
+
+							# Get position from dock proxy body
+							var container_dock_transform: Transform3D = PhysicsServer3D.body_get_state(container.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+
+							station_container_visual.position = container_dock_transform.origin
+							station_container_visual.transform.basis = container_dock_transform.basis
+
+							# Dynamically resize the visual based on actual container size
+							var container_size_scale = 3.0 * container.size_multiplier
+							var box_size = Vector3(6 * container_size_scale, 3 * container_size_scale, 10 * container_size_scale)
+							if station_container_visual.mesh is BoxMesh:
+								station_container_visual.mesh.size = box_size
+							break
+
+			station_container_visual.visible = found_docked_container
 
 func _update_pip_visibility() -> void:
 	# Context-aware PIP camera visibility

@@ -321,15 +321,21 @@ func _update_camera_container() -> void:
 				var container_space = container.get_interior_space()
 				# Match physics space to determine which container player is in
 				if player_space == container_space:
-					if dual_camera.vehicle_container != container:
-						dual_camera.vehicle_container = container
+					# CRITICAL: Find the outermost container in nesting hierarchy
+					# If this container is docked in another, we need to use the parent for camera
+					var outermost = _get_outermost_container(container)
+					if outermost and dual_camera.vehicle_container != outermost:
+						dual_camera.vehicle_container = outermost
 					return
 
 	# Check if player is in a vehicle docked in a container
 	elif character.is_in_vehicle and is_instance_valid(vehicle) and vehicle.is_docked:
 		var docked_container = vehicle._get_docked_container()
-		if docked_container and dual_camera.vehicle_container != docked_container:
-			dual_camera.vehicle_container = docked_container
+		if docked_container:
+			# CRITICAL: Find the outermost container in nesting hierarchy
+			var outermost = _get_outermost_container(docked_container)
+			if outermost and dual_camera.vehicle_container != outermost:
+				dual_camera.vehicle_container = outermost
 
 func _update_debug_ui() -> void:
 	# Update debug label on screen
@@ -345,15 +351,45 @@ func _update_debug_ui() -> void:
 	var viewport_size = get_viewport().get_visible_rect().size
 	debug_label.position = Vector2(10, viewport_size.y - 250)
 
-	# Update debug text
-	var space_name = character.current_space
+	# Build detailed nesting context string
 	var world_pos = character.get_world_position()
 	var proxy_pos = character.get_proxy_position()
 
-	# Check if vehicle is docked
-	var vehicle_docked = false
-	if is_instance_valid(vehicle) and is_instance_valid(vehicle_container_small):
-		vehicle_docked = vehicle.is_docked
+	var detailed_location = "World"
+
+	# Build detailed hierarchy string
+	if character.is_in_vehicle and is_instance_valid(vehicle):
+		if vehicle.is_docked:
+			var docked_container = vehicle._get_docked_container()
+			if docked_container:
+				# Check if docked container is itself docked
+				if docked_container.is_docked:
+					var parent_container = docked_container._get_docked_container()
+					if parent_container:
+						detailed_location = "Vehicle Interior (docked in %s, docked in %s)" % [docked_container.name, parent_container.name]
+					else:
+						detailed_location = "Vehicle Interior (docked in %s)" % [docked_container.name]
+				else:
+					detailed_location = "Vehicle Interior (docked in %s)" % [docked_container.name]
+		else:
+			detailed_location = "Vehicle Interior (undocked)"
+	elif character.is_in_container:
+		# Find which container player is in
+		var player_space = PhysicsServer3D.body_get_space(character.proxy_body)
+		for child in get_children():
+			if child is VehicleContainer:
+				var container = child
+				if is_instance_valid(container) and container.get_interior_space() == player_space:
+					# Check if this container is docked
+					if container.is_docked:
+						var parent_container = container._get_docked_container()
+						if parent_container:
+							detailed_location = "%s Interior (docked in %s)" % [container.name, parent_container.name]
+						else:
+							detailed_location = "%s Interior (docked)" % [container.name]
+					else:
+						detailed_location = "%s Interior (undocked)" % [container.name]
+					break
 
 	# Only show proxy position when in a proxy space (vehicle or container)
 	var proxy_info = ""
@@ -374,18 +410,12 @@ func _update_debug_ui() -> void:
 
 	debug_label.text = """=== DEBUG INFO ===
 FPS: %.0f | Spaces: %d
-Current Space: %s
-In Vehicle: %s
-In Container: %s
-Vehicle Docked: %s
+Location: %s
 World Pos: (%.1f, %.1f, %.1f)
 %s""" % [
 		fps_counter,
 		active_spaces,
-		space_name,
-		"YES" if character.is_in_vehicle else "NO",
-		"YES" if character.is_in_container else "NO",
-		"YES" if vehicle_docked else "NO",
+		detailed_location,
 		world_pos.x, world_pos.y, world_pos.z,
 		proxy_info
 	]
@@ -423,6 +453,8 @@ func _handle_input() -> void:
 
 func _handle_vehicle_controls() -> void:
 	# Get vehicle basis for directional movement
+	# Use exterior_body basis - this represents the ship's actual orientation
+	# The apply_thrust() function handles whether to apply to dock_proxy or exterior
 	var vehicle_basis = vehicle.exterior_body.global_transform.basis
 
 	# Vehicle DIRECTIONAL controls (TFGH) - Strong thrust for responsive movement
@@ -489,73 +521,78 @@ func _handle_vehicle_controls() -> void:
 			vehicle.toggle_magnetism()
 
 func _handle_container_controls() -> void:
-	# Player controls the OUTERMOST container in the nesting hierarchy
-	# This allows controlling the container whether directly inside or in a docked vehicle
+	# Player controls the IMMEDIATE container they are in (not the outermost)
+	# This allows piloting nested containers independently
 	var controllable_container: VehicleContainer = null
 	
 	# First, find which container the player is in (directly or via docked vehicle)
 	var immediate_container: VehicleContainer = null
-	
-	# Check if player is in small container
-	if is_instance_valid(vehicle_container_small) and _is_player_in_container(vehicle_container_small):
-		immediate_container = vehicle_container_small
-	# Check if player is in large container
-	elif is_instance_valid(vehicle_container_large) and _is_player_in_container(vehicle_container_large):
-		immediate_container = vehicle_container_large
+
+	# UNIVERSAL: Loop through all children to find which container player is in
+	for child in get_children():
+		if child is VehicleContainer:
+			var container = child
+			if is_instance_valid(container) and _is_player_in_container(container):
+				immediate_container = container
+				break
 
 	# If not in any container, return early
 	if not is_instance_valid(immediate_container):
 		return
 
-	# Now find the outermost container in the nesting hierarchy
-	controllable_container = _get_outermost_container(immediate_container)
+	# CRITICAL: Control the container you're directly in, not the outermost one
+	# This allows you to pilot the small container even when it's docked in the large container
+	controllable_container = immediate_container
 
 	# Debug: Check if we found a controllable container
 	if not is_instance_valid(controllable_container):
-		print("[CONTAINER CTRL] ERROR: controllable_container is null after _get_outermost_container")
+		print("[CONTAINER CTRL] ERROR: controllable_container is null")
 		return
 
-	# Determine thrust force based on the container being controlled
-	# Scale thrust with container mass for consistent acceleration
-	var thrust_force: float = 0.0
-	if controllable_container == vehicle_container_small:
-		thrust_force = 500000.0  # Small container: 50,000kg mass = 10 m/s² acceleration
-	elif controllable_container == vehicle_container_large:
-		thrust_force = 2500000.0  # Large container: 250,000kg mass = 10 m/s² acceleration
-	else:
-		# Unknown container - use default
-		thrust_force = 500000.0
+	# UNIVERSAL: Calculate thrust force based on container size
+	# Scale thrust with container size for consistent acceleration across all containers
+	# Formula: base_thrust * (size_multiplier / 5.0)
+	# This gives 500,000N for size 5, 1,000,000N for size 10, etc.
+	var base_thrust = 500000.0
+	var thrust_force = base_thrust * (controllable_container.size_multiplier / 5.0)
 
 	# Get container basis for directional movement
-	var container_basis = controllable_container.exterior_body.global_transform.basis
+	# CRITICAL: Use dock_proxy_body basis if docked, otherwise use recursive world transform
+	var container_basis: Basis
+	if controllable_container.is_docked and controllable_container.dock_proxy_body.is_valid():
+		# Container is docked - use dock_proxy_body's local orientation in parent space
+		var dock_transform = PhysicsServer3D.body_get_state(controllable_container.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+		container_basis = dock_transform.basis
+	else:
+		# Container not docked - use recursive world transform
+		var container_world_transform = VehicleContainer.get_world_transform(controllable_container)
+		container_basis = container_world_transform.basis
 
-	# Container DIRECTIONAL controls (IJKL) - same for all containers
+	# Container DIRECTIONAL controls (IJKL) - higher thrust for responsive movement
 	if Input.is_key_pressed(KEY_I):
 		# Forward (negative Z in container's local space)
 		var forward = -container_basis.z
-		controllable_container.apply_thrust(forward, thrust_force)
+		controllable_container.apply_thrust(forward, thrust_force * 3.0)
 
 	if Input.is_key_pressed(KEY_K):
 		# Backward (positive Z in container's local space)
 		var backward = container_basis.z
-		controllable_container.apply_thrust(backward, thrust_force)
+		controllable_container.apply_thrust(backward, thrust_force * 3.0)
 
 	if Input.is_key_pressed(KEY_J):
 		# Left (negative X in container's local space)
 		var left = -container_basis.x
-		controllable_container.apply_thrust(left, thrust_force)
+		controllable_container.apply_thrust(left, thrust_force * 3.0)
 
 	if Input.is_key_pressed(KEY_L):
 		# Right (positive X in container's local space)
 		var right = container_basis.x
-		controllable_container.apply_thrust(right, thrust_force)
+		controllable_container.apply_thrust(right, thrust_force * 3.0)
 
 	# Container VERTICAL controls (U/P) - higher thrust to overcome gravity
 	if Input.is_key_pressed(KEY_U):
 		# Raise (positive Y in container's local space)
 		var up = container_basis.y
-		if Engine.get_frames_drawn() % 60 == 0:
-			print("[CONTAINER CTRL] Applying UP thrust: ", thrust_force * 2.0, " to ", controllable_container.name)
 		controllable_container.apply_thrust(up, thrust_force * 2.0)
 
 	if Input.is_key_pressed(KEY_P):
@@ -675,79 +712,190 @@ func _check_transitions() -> void:
 				character.set_proxy_position(entry_check["local_pos"], entry_check["local_velocity"])
 			elif character.is_in_container and vehicle.is_docked:
 				# Player in container space, check if can enter docked ship
-				# Get player position in container space
-				var player_container_pos = character.get_proxy_position()
+				# CRITICAL: First verify player is in the SAME container the ship is docked in
+				var ship_docked_container = vehicle._get_docked_container()
 
-				# Get ship's dock_proxy_body position in container space
-				var ship_dock_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+				if ship_docked_container:
+					# Check if player's physics space matches the container the ship is docked in
+					var player_space = PhysicsServer3D.body_get_space(character.proxy_body)
+					var ship_container_space = ship_docked_container.get_interior_space()
 
-				# Calculate player position relative to ship
-				var relative_to_ship = player_container_pos - ship_dock_transform.origin
-				var ship_local_pos = ship_dock_transform.basis.inverse() * relative_to_ship
+					if player_space == ship_container_space:
+						# Player IS in the same container as the docked ship - check entry
+						# Get player position in container space
+						var player_container_pos = character.get_proxy_position()
 
+						# Get ship's dock_proxy_body position in container space
+						var ship_dock_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-				# Check if at ship entrance zone (match undocked entry zone: 10-15)
-				var at_docked_ship_entrance = (
-					abs(ship_local_pos.x) < 9.0 and
-					abs(ship_local_pos.y) < 4.5 and
-					ship_local_pos.z > 10.0 and ship_local_pos.z < 15.0  # Match undocked entry zone
-				)
+						# Calculate player position relative to ship
+						var relative_to_ship = player_container_pos - ship_dock_transform.origin
+						var ship_local_pos = ship_dock_transform.basis.inverse() * relative_to_ship
 
-				# Get velocity in container space and transform to ship space
-				var container_velocity = character.get_proxy_velocity()
-				var ship_local_velocity = ship_dock_transform.basis.inverse() * container_velocity
+						# Check if at ship entrance zone (match undocked entry zone: 10-15)
+						var at_docked_ship_entrance = (
+							abs(ship_local_pos.x) < 9.0 and
+							abs(ship_local_pos.y) < 4.5 and
+							ship_local_pos.z > 10.0 and ship_local_pos.z < 15.0  # Match undocked entry zone
+						)
 
-				# CRITICAL: Only enter if moving INTO interior (negative Z velocity in local space)
-				var moving_into_vehicle_from_container = ship_local_velocity.z < -1.0
+						# Get velocity in container space and transform to ship space
+						var container_velocity = character.get_proxy_velocity()
+						var ship_local_velocity = ship_dock_transform.basis.inverse() * container_velocity
 
-				if at_docked_ship_entrance and moving_into_vehicle_from_container:
-					# Player entering docked ship from container
+						# CRITICAL: Only enter if moving INTO interior (negative Z velocity in local space)
+						var moving_into_vehicle_from_container = ship_local_velocity.z < -1.0
 
-					# Find which container the ship is docked in
-					var docked_container = vehicle._get_docked_container()
+						if at_docked_ship_entrance and moving_into_vehicle_from_container:
+							# Player entering docked ship from container
+							# CRITICAL: Exit container state before entering vehicle
+							# This ensures clean transition from container -> vehicle
+							character.exit_container()
 
-					# CRITICAL: Exit container state before entering vehicle
-					# This ensures clean transition from container -> vehicle
-					character.exit_container()
+							# Activate and enter vehicle interior space (UNIVERSAL HELPER)
+							var vehicle_space = vehicle.get_interior_space()
+							_activate_and_enter_interior_space(vehicle_space)
 
-					# Activate and enter vehicle interior space (UNIVERSAL HELPER)
-					var vehicle_space = vehicle.get_interior_space()
-					_activate_and_enter_interior_space(vehicle_space)
+							# Check if orientation transition is needed (for UP direction only)
+							# CRITICAL: Use recursive transform in case ship_docked_container is itself nested
+							var ship_basis = vehicle.exterior_body.global_transform.basis
+							var ship_up = ship_basis.y
+							var container_world_transform = VehicleContainer.get_world_transform(ship_docked_container)
+							var container_up = container_world_transform.basis.y
+							var up_dot = ship_up.dot(container_up)
+							var needs_reorientation = up_dot < 0.95
 
-					# Check if orientation transition is needed (for UP direction only)
-					var ship_basis = vehicle.exterior_body.global_transform.basis
-					var ship_up = ship_basis.y
-					var container_up = docked_container.exterior_body.global_transform.basis.y
-					var up_dot = ship_up.dot(container_up)
-					var needs_reorientation = up_dot < 0.95
+							# Adjust camera yaw to compensate for ship's rotation relative to container
+							# Get ship's yaw rotation relative to container
+							var container_basis = container_world_transform.basis
+							var ship_forward_container = container_basis.inverse() * ship_basis.z
+							var ship_yaw_in_container = atan2(ship_forward_container.x, ship_forward_container.z)
 
-					# Adjust camera yaw to compensate for ship's rotation relative to container
-					# Get ship's yaw rotation relative to container
-					var container_basis = docked_container.exterior_body.global_transform.basis
-					var ship_forward_container = container_basis.inverse() * ship_basis.z
-					var ship_yaw_in_container = atan2(ship_forward_container.x, ship_forward_container.z)
+							# Adjust camera's base rotation by ship's yaw
+							dual_camera.base_rotation.y -= ship_yaw_in_container
 
-					# Adjust camera's base rotation by ship's yaw
-					dual_camera.base_rotation.y -= ship_yaw_in_container
+							# Construct target basis for reorientation
+							var target_basis: Basis
+							if needs_reorientation:
+								var camera_forward = dual_camera.get_forward_direction()
+								var local_forward = ship_basis.inverse() * camera_forward
+								local_forward = local_forward.normalized()
 
-					# Construct target basis for reorientation
-					var target_basis: Basis
-					if needs_reorientation:
-						var camera_forward = dual_camera.get_forward_direction()
-						var local_forward = ship_basis.inverse() * camera_forward
-						local_forward = local_forward.normalized()
+								var local_up = Vector3.UP
+								var local_right = local_forward.cross(local_up).normalized()
+								local_forward = local_right.cross(local_up).normalized()
+								target_basis = Basis(local_right, local_up, local_forward)
+							else:
+								target_basis = Basis.IDENTITY
 
-						var local_up = Vector3.UP
-						var local_right = local_forward.cross(local_up).normalized()
-						local_forward = local_right.cross(local_up).normalized()
-						target_basis = Basis(local_right, local_up, local_forward)
-					else:
-						target_basis = Basis.IDENTITY
+							character.enter_vehicle(needs_reorientation, target_basis)
 
-					character.enter_vehicle(needs_reorientation, target_basis)
+							# Seamlessly set position (no clamping)
+							character.set_proxy_position(ship_local_pos, ship_local_velocity)
 
-					# Seamlessly set position (no clamping)
-					character.set_proxy_position(ship_local_pos, ship_local_velocity)
+	# UNIVERSAL: Check if player can enter a docked container from another container
+	if character.is_in_container:
+		# Get player's current container space
+		var player_space = PhysicsServer3D.body_get_space(character.proxy_body)
+		var player_container_pos = character.get_proxy_position()
+		var player_container_velocity = character.get_proxy_velocity()
+
+		# Find which container the player is currently in
+		var current_container: VehicleContainer = null
+		for child in get_children():
+			if child is VehicleContainer:
+				var container = child
+				if is_instance_valid(container) and container.get_interior_space() == player_space:
+					current_container = container
+					break
+
+		# If we found the current container, check for docked containers inside it
+		if current_container:
+			# Loop through all containers to find any docked in current_container
+			for child in get_children():
+				if child is VehicleContainer:
+					var docked_container = child
+					# Skip if not docked or not docked in current container
+					if not docked_container.is_docked or docked_container._get_docked_container() != current_container:
+						continue
+
+					# Get docked container's position in current container space
+					var container_dock_transform = PhysicsServer3D.body_get_state(docked_container.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+
+					# Calculate player position relative to docked container
+					var relative_to_container = player_container_pos - container_dock_transform.origin
+					var container_local_pos = container_dock_transform.basis.inverse() * relative_to_container
+
+					# Entry zone scaled by container size (match player entry from world logic)
+					var size_scale = 3.0 * docked_container.size_multiplier
+					var half_width = 3.0 * size_scale
+					var half_height = 1.5 * size_scale
+					var half_length = 5.0 * size_scale
+					# Match entry zone to world entry: half_length - 10 to half_length
+					var entry_z_min = half_length - 10.0  # 10 units from front
+					var entry_z_max = half_length + 5.0   # Allow slightly past opening for buffer
+
+					# Check if at docked container entrance zone
+					var at_docked_container_entrance = (
+						abs(container_local_pos.x) < half_width and
+						abs(container_local_pos.y) < half_height and
+						container_local_pos.z > entry_z_min and container_local_pos.z < entry_z_max
+					)
+
+					# Get velocity in container space and transform to docked container space
+					var container_local_velocity = container_dock_transform.basis.inverse() * player_container_velocity
+
+					# CRITICAL: Only enter if moving INTO interior (negative Z velocity in local space)
+					var moving_into_container = container_local_velocity.z < -1.0
+
+					if at_docked_container_entrance and moving_into_container:
+						# Player entering docked container from outer container
+						print("[CONTAINER ENTRY] Entering docked ", docked_container.name, " from ", current_container.name)
+
+						# CRITICAL: Exit current container state before entering docked container
+						character.exit_container()
+
+						# Activate and enter docked container interior space
+						var docked_space = docked_container.get_interior_space()
+						_activate_and_enter_interior_space(docked_space)
+
+						# Check if orientation transition is needed
+						# CRITICAL: Use recursive transforms in case containers are nested
+						var docked_world_transform = VehicleContainer.get_world_transform(docked_container)
+						var docked_basis = docked_world_transform.basis
+						var docked_up = docked_basis.y
+						var current_world_transform = VehicleContainer.get_world_transform(current_container)
+						var current_up = current_world_transform.basis.y
+						var up_dot = docked_up.dot(current_up)
+						var needs_reorientation = up_dot < 0.95
+
+						# Adjust camera yaw to compensate for docked container's rotation
+						var current_basis = current_world_transform.basis
+						var docked_forward_in_current = current_basis.inverse() * docked_basis.z
+						var docked_yaw_in_current = atan2(docked_forward_in_current.x, docked_forward_in_current.z)
+						dual_camera.base_rotation.y -= docked_yaw_in_current
+
+						# Construct target basis for reorientation
+						var target_basis: Basis
+						if needs_reorientation:
+							var camera_forward = dual_camera.get_forward_direction()
+							var local_forward = docked_basis.inverse() * camera_forward
+							local_forward = local_forward.normalized()
+
+							var local_up = Vector3.UP
+							var local_right = local_forward.cross(local_up).normalized()
+							local_forward = local_right.cross(local_up).normalized()
+							target_basis = Basis(local_right, local_up, local_forward)
+						else:
+							target_basis = Basis.IDENTITY
+
+						character.enter_container(needs_reorientation, target_basis)
+
+						# Seamlessly set position (no clamping)
+						character.set_proxy_position(container_local_pos, container_local_velocity)
+
+						# Break after entering one container
+						break
 
 	# Check container transition zones - seamless entry/exit for ALL containers
 	if character.is_in_container:
@@ -817,14 +965,16 @@ func _check_transitions() -> void:
 						_activate_and_enter_interior_space(vehicle_space)
 
 						# Check if orientation transition is needed (for UP direction only)
+						# CRITICAL: Use recursive transform in case container is itself nested
 						var ship_basis = vehicle.exterior_body.global_transform.basis
 						var ship_up = ship_basis.y
-						var container_up = container.exterior_body.global_transform.basis.y
+						var container_world_transform = VehicleContainer.get_world_transform(container)
+						var container_up = container_world_transform.basis.y
 						var up_dot = ship_up.dot(container_up)
 						var needs_reorientation = up_dot < 0.95
 
 						# Adjust camera yaw to compensate for ship's rotation relative to container
-						var container_basis = container.exterior_body.global_transform.basis
+						var container_basis = container_world_transform.basis
 						var ship_forward_container = container_basis.inverse() * ship_basis.z
 						var ship_yaw_in_container = atan2(ship_forward_container.x, ship_forward_container.z)
 
@@ -852,56 +1002,127 @@ func _check_transitions() -> void:
 
 				# Only exit to world if NOT entering docked ship
 				if not entering_docked_ship:
-					# Calculate world position for exit
-					var container_transform = container.exterior_body.global_transform
-					var world_velocity = container_transform.basis * proxy_velocity
-					var world_pos = container_transform.origin + container_transform.basis * proxy_pos
+					# CRITICAL: Check if this container is docked in a parent container
+					# If so, exit to parent container instead of world
+					var parent_container = container._get_docked_container()
 
-					# Get forward direction in world space (container's +Z is forward)
-					var exit_forward = container_transform.basis.z
+					if parent_container and container.is_docked:
+						# Container is docked in parent - exit to parent container space
+						# Get this container's dock position in parent space
+						var container_dock_transform = PhysicsServer3D.body_get_state(container.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-					# CRITICAL: Check if exit position is blocked in exterior world
-					if _is_exit_position_blocked(world_pos, Vector3.UP, exit_forward):
-						# Stop at the boundary - don't allow forward movement past exit threshold
-						# Don't process the exit transition
-						break
+						# CRITICAL: Player is exiting through container opening (at z = half_length)
+						# Need to place them OUTSIDE the docked container in parent space
+						# Add offset in +Z direction (forward of container opening)
+						# Reuse size_scale and half_length already calculated above
+						# Place player at standing height (Y=1.0) to prevent falling through floor
+						var exit_offset = Vector3(0, 1.0, half_length + 2.0)  # 1 unit up, 2 units past opening
 
-					# Check if orientation transition is needed (for UP direction only)
-					var container_up = container.exterior_body.global_transform.basis.y
-					var world_up = Vector3.UP
-					var up_dot = container_up.dot(world_up)
-					var needs_reorientation = up_dot < 0.95
+						# Transform exit position to parent space
+						var parent_proxy_pos = container_dock_transform.origin + container_dock_transform.basis * exit_offset
+						var parent_proxy_velocity = container_dock_transform.basis * proxy_velocity
 
-					# Reverse the camera yaw adjustment we made on entry (same as vehicle)
-					# Get container's yaw rotation relative to world
-					var container_forward_world = container_transform.basis.z
-					var container_yaw = atan2(container_forward_world.x, container_forward_world.z)
+						# Exit current container
+						character.exit_container()
 
-					# Add back the container's yaw (reverse of subtraction on entry)
-					dual_camera.base_rotation.y += container_yaw
+						# Enter parent container
+						var parent_space = parent_container.get_interior_space()
+						_activate_and_enter_interior_space(parent_space)
 
-					# Construct target basis for reorientation
-					var exit_basis: Basis
-					if needs_reorientation:
-						var camera_forward = dual_camera.get_forward_direction()
-						var local_forward = camera_forward
-						local_forward = local_forward.normalized()
+						# Check orientation transition
+						var container_world_transform = VehicleContainer.get_world_transform(container)
+						var parent_world_transform = VehicleContainer.get_world_transform(parent_container)
+						var container_up = container_world_transform.basis.y
+						var parent_up = parent_world_transform.basis.y
+						var up_dot = container_up.dot(parent_up)
+						var needs_reorientation = up_dot < 0.95
 
-						var local_up = Vector3.UP
-						var local_right = local_forward.cross(local_up).normalized()
-						local_forward = local_right.cross(local_up).normalized()
-						exit_basis = Basis(local_right, local_up, local_forward)
+						# Adjust camera yaw
+						var container_basis = container_world_transform.basis
+						var parent_basis = parent_world_transform.basis
+						var container_forward_in_parent = parent_basis.inverse() * container_basis.z
+						var container_yaw_in_parent = atan2(container_forward_in_parent.x, container_forward_in_parent.z)
+						dual_camera.base_rotation.y += container_yaw_in_parent
+
+						# Construct target basis
+						var target_basis: Basis
+						if needs_reorientation:
+							var camera_forward = dual_camera.get_forward_direction()
+							var local_forward = parent_basis.inverse() * camera_forward
+							local_forward = local_forward.normalized()
+							var local_up = Vector3.UP
+							var local_right = local_forward.cross(local_up).normalized()
+							local_forward = local_right.cross(local_up).normalized()
+							target_basis = Basis(local_right, local_up, local_forward)
+						else:
+							target_basis = Basis.IDENTITY
+
+						character.enter_container(needs_reorientation, target_basis)
+						character.set_proxy_position(parent_proxy_pos, parent_proxy_velocity)
+
+						# CRITICAL: Update camera to track parent container (outermost in hierarchy)
+						var outermost = _get_outermost_container(parent_container)
+						if outermost and dual_camera.vehicle_container != outermost:
+							dual_camera.vehicle_container = outermost
+
+						# Set camera target up direction to parent container
+						if is_instance_valid(dual_camera):
+							dual_camera.set_target_up_direction(parent_up)
 					else:
-						exit_basis = Basis.IDENTITY
+						# Container not docked - exit to world
+						# Calculate world position for exit
+						# CRITICAL: Use recursive transform in case container is nested
+						var container_world_transform = VehicleContainer.get_world_transform(container)
+						var world_velocity = container_world_transform.basis * proxy_velocity
 
-					# Exit container state with reorientation
-					character.exit_container(needs_reorientation, exit_basis)
+						# Use player's actual position for seamless exit (no teleporting)
+						var world_pos = container_world_transform.origin + container_world_transform.basis * proxy_pos
 
-					# Transition camera up direction back to world up
-					if is_instance_valid(dual_camera):
-						dual_camera.set_target_up_direction(Vector3.UP)
+						# Get forward direction in world space (container's +Z is forward)
+						var exit_forward = container_world_transform.basis.z
 
-					character.set_world_position(world_pos, world_velocity)
+						# CRITICAL: Check if exit position is blocked in exterior world
+						if _is_exit_position_blocked(world_pos, Vector3.UP, exit_forward):
+							# Stop at the boundary - don't allow forward movement past exit threshold
+							# Don't process the exit transition
+							break
+
+						# Check if orientation transition is needed (for UP direction only)
+						var container_up = container_world_transform.basis.y
+						var world_up = Vector3.UP
+						var up_dot = container_up.dot(world_up)
+						var needs_reorientation = up_dot < 0.95
+
+						# Reverse the camera yaw adjustment we made on entry (same as vehicle)
+						# Get container's yaw rotation relative to world
+						var container_forward_world = container_world_transform.basis.z
+						var container_yaw = atan2(container_forward_world.x, container_forward_world.z)
+
+						# Add back the container's yaw (reverse of subtraction on entry)
+						dual_camera.base_rotation.y += container_yaw
+
+						# Construct target basis for reorientation
+						var exit_basis: Basis
+						if needs_reorientation:
+							var camera_forward = dual_camera.get_forward_direction()
+							var local_forward = camera_forward
+							local_forward = local_forward.normalized()
+
+							var local_up = Vector3.UP
+							var local_right = local_forward.cross(local_up).normalized()
+							local_forward = local_right.cross(local_up).normalized()
+							exit_basis = Basis(local_right, local_up, local_forward)
+						else:
+							exit_basis = Basis.IDENTITY
+
+						# Exit container state with reorientation
+						character.exit_container(needs_reorientation, exit_basis)
+
+						# Transition camera up direction back to world up
+						if is_instance_valid(dual_camera):
+							dual_camera.set_target_up_direction(Vector3.UP)
+
+						character.set_world_position(world_pos, world_velocity)
 
 				# Try to deactivate container space if no one left inside (UNIVERSAL HELPER)
 				_try_deactivate_interior_space(container_space, _is_anyone_in_container(container))
@@ -939,7 +1160,6 @@ func _check_transitions() -> void:
 
 
 				if vehicle.is_docked:
-					var actual_docked = vehicle._get_docked_container()
 					var containers = [vehicle_container_small, vehicle_container_large]
 
 					for container in containers:
@@ -965,24 +1185,21 @@ func _check_transitions() -> void:
 						var half_height = 1.5 * size_scale
 						var half_length = 5.0 * size_scale
 
-
-						# Calculate actual floor position for comparison
-						var floor_y = -1.5 * size_scale + 0.1
-
-						# Check each bound individually for debugging
+						# Check each bound individually
 						# Add buffer to Y bounds to allow players standing on floor
 						# Floor is at -1.5*size_scale + 0.1, so allow 2 units below that for safety
 						var y_min = -half_height - 2.0
 						var y_max = half_height + 1.0
+						# Add buffer to Z bounds to account for ship exit zone extending slightly past container bounds
+						var z_buffer = 5.0  # Allow up to 5 units past container front for ship exit
 
 						var x_ok = abs(container_proxy_pos.x) < half_width
 						var y_ok = container_proxy_pos.y > y_min and container_proxy_pos.y < y_max
-						var z_ok = container_proxy_pos.z > -half_length and container_proxy_pos.z < half_length
+						var z_ok = container_proxy_pos.z > -half_length and container_proxy_pos.z < half_length + z_buffer
 
 
 						# Check if exit position is actually INSIDE the container interior space
 						var inside_container = x_ok and y_ok and z_ok
-
 
 						if inside_container:
 							should_enter_container = true
@@ -999,11 +1216,13 @@ func _check_transitions() -> void:
 				var ship_up = vehicle.exterior_body.global_transform.basis.y
 
 				# Determine target UP based on whether entering container or world
+				# CRITICAL: Use recursive transform in case target_container is nested
 				var target_up: Vector3
 				var target_basis: Basis
 				if should_enter_container and target_container:
-					target_up = target_container.exterior_body.global_transform.basis.y
-					target_basis = target_container.exterior_body.global_transform.basis
+					var target_world_transform = VehicleContainer.get_world_transform(target_container)
+					target_up = target_world_transform.basis.y
+					target_basis = target_world_transform.basis
 				else:
 					target_up = Vector3.UP
 					target_basis = Basis.IDENTITY
@@ -1052,8 +1271,10 @@ func _check_transitions() -> void:
 
 					# CRITICAL: Adjust camera orientation for ship->container transition
 					# Transition camera up direction from ship to container
+					# Use recursive transform in case target_container is nested
 					if is_instance_valid(dual_camera) and target_container and target_container.exterior_body:
-						var container_up = target_container.exterior_body.global_transform.basis.y
+						var target_world_transform = VehicleContainer.get_world_transform(target_container)
+						var container_up = target_world_transform.basis.y
 						dual_camera.set_target_up_direction(container_up)
 
 					# Activate and enter container interior space (UNIVERSAL HELPER)
@@ -1064,6 +1285,14 @@ func _check_transitions() -> void:
 					# needs_reorientation and target_basis were already set correctly above
 					# Use natural container position - seamless physics transition
 					# Reorient if ship and container have different orientations
+
+					# Safety check: Ensure player is above floor in container space
+					var size_scale = 3.0 * target_container.size_multiplier
+					var floor_y = -1.5 * size_scale + 0.1
+					var min_y = floor_y + 1.0  # 1 unit above floor
+					if container_proxy_pos.y < min_y:
+						container_proxy_pos.y = min_y
+
 					character.enter_container(needs_reorientation, exit_basis)
 					character.set_proxy_position(container_proxy_pos, container_velocity)
 				else:
@@ -1207,15 +1436,17 @@ func _check_transitions() -> void:
 
 			# Seamless entry/exit at boundary - like player transitions
 			# Ship collision box is 30 units long (±15 from center)
-			# Enter when ship's ENTIRE collision box is inside container
-			# Container front is at z=half_length (75 for small, 150 for large)
-			var ship_half_length = 15.0  # Ship collision box half-length
-			var enter_z = half_length - ship_half_length - 5.0   # Enter when fully inside (ship front < container front)
+			# With velocity-based hysteresis, we can have a generous entry zone
+			# The velocity check prevents accidental docking from stationary/backing ships
+			# Container front is at z=half_length (72 for small, 147 for large)
+			# Player entry uses: enter_z = half_length - 5.0
+			# For ships, use similar proportion but slightly deeper since ships are larger
+			var enter_z = half_length - 10.0   # Enter when ship center is ~10 units inside (z=62 for small, z=137 for large)
 
 			# CRITICAL: Exit EARLY while ship is still mostly inside
 			# This allows ship to transition to world physics before leaving container exterior
 			# Exit when ship center reaches near the opening (not when fully outside)
-			var exit_z = enter_z + 10.0  # Exit just 10 units past entry point (still well inside)
+			var exit_z = enter_z + 15.0  # Exit zone slightly wider for smooth transitions
 
 			# Check each condition individually for debugging
 			var x_inside = abs(local_pos.x) < half_width - 5.0
@@ -1234,7 +1465,17 @@ func _check_transitions() -> void:
 
 			var vehicle_outside = x_outside or y_outside_min or y_outside_max or z_outside_back or z_outside_front
 
-			if vehicle_inside and not vehicle.is_docked:
+			# CRITICAL: Add velocity-based hysteresis like player transitions
+			# Get vehicle velocity in container's local space
+			var vehicle_velocity = vehicle.exterior_body.linear_velocity
+			var container_basis = container.exterior_body.global_transform.basis
+			var local_velocity = container_basis.inverse() * vehicle_velocity
+
+			# Check if moving INTO container (negative Z) or OUT (positive Z)
+			var moving_into_container = local_velocity.z < -1.0
+			var moving_out_of_container = local_velocity.z > 1.0
+
+			if vehicle_inside and not vehicle.is_docked and moving_into_container:
 				# Vehicle entering THIS container - seamless transition at boundary
 				var container_name = "Small" if container == vehicle_container_small else "Large"
 				_debounced_log("DOCKING", "Vehicle entered " + container_name + " container", {
@@ -1244,15 +1485,16 @@ func _check_transitions() -> void:
 				})
 				vehicle.set_docked(true, container)
 				break  # Only dock in one container
-			elif vehicle_outside and vehicle.is_docked:
+			elif vehicle_outside and vehicle.is_docked and moving_out_of_container:
 				# Check if docked in THIS container before undocking
 				var docked_container = vehicle._get_docked_container()
 				if docked_container == container:
-					# Vehicle leaving THIS container
+					# Vehicle leaving THIS container with outward velocity
 					_debounced_log("DOCKING", "Vehicle left dock zone", {
 						"x": local_pos.x,
 						"y": local_pos.y,
-						"z": local_pos.z
+						"z": local_pos.z,
+						"velocity_z": local_velocity.z
 					})
 					vehicle.set_docked(false, container)
 
@@ -1262,38 +1504,88 @@ func _check_transitions() -> void:
 
 					break
 
-		# Check container-in-container docking (small container docking in large container)
-	if is_instance_valid(vehicle_container_small) and vehicle_container_small.exterior_body and is_instance_valid(vehicle_container_large) and vehicle_container_large.exterior_body:
-		# Transform small container's world position to large container's local space
-		var small_world_pos = vehicle_container_small.exterior_body.global_position
-		var large_transform = vehicle_container_large.exterior_body.global_transform
-		var relative_pos = small_world_pos - large_transform.origin
-		var local_pos = large_transform.basis.inverse() * relative_pos
+		# UNIVERSAL: Check container-in-container docking for ALL container pairs
+	# Loop through all children to find VehicleContainer nodes
+	var all_containers: Array[VehicleContainer] = []
+	for child in get_children():
+		if child is VehicleContainer and is_instance_valid(child) and child.exterior_body:
+			all_containers.append(child)
 
-		# Docking zone with HYSTERESIS for containers
-		# Large container is 10x ship: 180 wide (±90), 90 tall (±45), 300 long (±150)
-		# Small container is 5x ship: 90 wide (±45), 45 tall (±22.5), 150 long (±75)
-		# Opening is at z=+150 for large container
-		# ENTER zone: z < 110 (container must be well inside)
-		# EXIT zone: z > 130 (container must move significantly out)
-		var small_fully_inside = (
-		abs(local_pos.x) < 60.0 and
-		local_pos.y > -45.0 and local_pos.y < 45.0 and
-		local_pos.z > -120.0 and local_pos.z < 110.0  # Enter threshold
-		)
+	# Check each pair of containers (potential_child docking in potential_parent)
+	for potential_child in all_containers:
+		for potential_parent in all_containers:
+			# Skip if same container or if potential_parent is smaller/equal size
+			if potential_child == potential_parent:
+				continue
+			if potential_parent.size_multiplier <= potential_child.size_multiplier:
+				continue
 
-		var small_outside = (
-		abs(local_pos.x) > 70.0 or  # Wider exit threshold
-		local_pos.y < -50.0 or local_pos.y > 50.0 or
-		local_pos.z < -130.0 or local_pos.z > 130.0  # Exit threshold (20 units more permissive)
-		)
+			# Transform child container's world position to parent container's local space
+			var child_world_pos = potential_child.exterior_body.global_position
+			var parent_transform = potential_parent.exterior_body.global_transform
+			var relative_pos = child_world_pos - parent_transform.origin
+			var local_pos = parent_transform.basis.inverse() * relative_pos
 
-		if small_fully_inside and not vehicle_container_small.is_docked:
-			# Small container entering large container dock
-			vehicle_container_small.set_docked(true, vehicle_container_large)
-		elif small_outside and vehicle_container_small.is_docked:
-			# Small container leaving large container dock (requires moving further out)
-			vehicle_container_small.set_docked(false, vehicle_container_large)
+			# Parent container interior bounds (scaled by size_multiplier)
+			var parent_size_scale = 3.0 * potential_parent.size_multiplier
+			var half_width = 3.0 * parent_size_scale - 3.0  # 3 unit margin from walls
+			var half_height = 1.5 * parent_size_scale - 3.0  # 3 unit margin from floor/ceiling
+			var half_length = 5.0 * parent_size_scale - 3.0  # 3 unit margin from back wall
+
+			# Seamless entry/exit with velocity-based hysteresis
+			# Like ships: use generous entry zone, velocity prevents accidental docking
+			# Enter when child container center is ~10 units inside parent opening
+			var enter_z = half_length - 10.0  # Same as ship entry logic
+			var exit_z = enter_z + 15.0  # Exit zone slightly wider for smooth transitions
+
+			# Check bounds with margins (like vehicle docking)
+			var x_inside = abs(local_pos.x) < half_width - 5.0
+			var y_inside_min = local_pos.y > -half_height - 5.0
+			var y_inside_max = local_pos.y < half_height + 5.0
+			var z_inside_front = local_pos.z < enter_z
+			var z_inside_back = local_pos.z > -half_length + 5.0
+
+			var container_inside = x_inside and y_inside_min and y_inside_max and z_inside_front and z_inside_back
+
+			# Exit thresholds (wider for hysteresis)
+			var x_outside = abs(local_pos.x) > half_width + 10.0
+			var y_outside_min = local_pos.y < -half_height - 10.0
+			var y_outside_max = local_pos.y > half_height + 10.0
+			var z_outside_back = local_pos.z < -half_length - 10.0
+			var z_outside_front = local_pos.z > exit_z
+
+			var container_outside = x_outside or y_outside_min or y_outside_max or z_outside_back or z_outside_front
+
+			# CRITICAL: Add velocity-based hysteresis like ship docking
+			# Get container velocity in parent container's local space
+			var child_velocity = potential_child.exterior_body.linear_velocity
+			var parent_basis = potential_parent.exterior_body.global_transform.basis
+			var local_velocity = parent_basis.inverse() * child_velocity
+
+			# Check if moving INTO parent container (negative Z) or OUT (positive Z)
+			var moving_into_container = local_velocity.z < -1.0
+			var moving_out_of_container = local_velocity.z > 1.0
+
+			if container_inside and not potential_child.is_docked and moving_into_container:
+				# Container entering parent container - seamless transition with velocity check
+				_debounced_log("CONTAINER DOCK", potential_child.name + " entered " + potential_parent.name, {
+					"x": local_pos.x,
+					"y": local_pos.y,
+					"z": local_pos.z
+				})
+				potential_child.set_docked(true, potential_parent)
+				break  # Only dock in one container
+			elif container_outside and potential_child.is_docked and moving_out_of_container:
+				# Check if docked in THIS parent container before undocking
+				var docked_in = potential_child._get_docked_container()
+				if docked_in == potential_parent:
+					# Container leaving parent container with outward velocity
+					_debounced_log("CONTAINER DOCK", potential_child.name + " left " + potential_parent.name, {
+						"x": local_pos.x,
+						"y": local_pos.y,
+						"z": local_pos.z
+					})
+					potential_child.set_docked(false, potential_parent)
 
 # Physics space optimization: spaces activate on-demand and deactivate when empty or all bodies are sleeping
 
@@ -1512,20 +1804,24 @@ func _get_outermost_container(start_container: VehicleContainer) -> VehicleConta
 	return outermost
 
 func _is_player_in_container(container: VehicleContainer) -> bool:
-	# Check if player is in this specific container
+	# Check if player is in this SPECIFIC IMMEDIATE container
+	# NOT in a parent container that this container is docked in
 	# Player is in container if:
 	# 1. They're directly in the container (character.is_in_container)
 	# 2. They're in a vehicle that's docked in this container
 
-	# Direct container check
+	# Direct container check - player's physics space matches this container's space
 	if character.is_in_container:
 		# Get the container's interior space RID
 		var container_space = container.get_interior_space()
 		var player_space = PhysicsServer3D.body_get_space(character.proxy_body)
+		# CRITICAL: Only return true if EXACTLY in THIS container's space
+		# Not if player is in a nested container that's docked in this one
 		if player_space == container_space:
 			return true
 
 	# Check if player is in vehicle docked in this container
+	# But NOT if that vehicle is in a nested container
 	if character.is_in_vehicle and is_instance_valid(vehicle) and vehicle.is_docked:
 		var docked_container = vehicle._get_docked_container()
 		if docked_container == container:

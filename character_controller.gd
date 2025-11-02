@@ -220,7 +220,6 @@ func _update_character_visual_position(delta: float) -> void:
 		# Find the SPECIFIC container that the player is in by checking physics spaces
 		var player_space = PhysicsServer3D.body_get_space(proxy_body)
 		var game_manager = get_parent()
-		var found_container = false
 		if game_manager:
 			for child in game_manager.get_children():
 				if child is VehicleContainer:
@@ -228,27 +227,19 @@ func _update_character_visual_position(delta: float) -> void:
 					var container_space = container.get_interior_space()
 					# Check if this is the container the player is actually in
 					if container_space == player_space and container.exterior_body:
-						found_container = true
-						var container_transform = container.exterior_body.global_transform
-						var container_basis = container_transform.basis
+						# Get the container's world transform (handles recursive nesting)
+						var container_world_transform = VehicleContainer.get_world_transform(container)
+						var container_world_basis = container_world_transform.basis
 
-						# Update target to track container's orientation
-						target_visual_basis = container_basis
+						# Update target to track container's world orientation
+						target_visual_basis = container_world_basis
 
-						# Transform proxy position (in container's interior space) to world space
-						# No Y offset needed - coordinates are already relative to container
-						var world_pos = container_transform.origin + container_basis * proxy_pos
+						# Transform proxy position to world space
+						var world_pos = container_world_transform.origin + container_world_basis * proxy_pos
 						character_visual.global_position = world_pos
-						# Use transitioning basis (smoothly follows target)
 						character_visual.global_transform.basis = current_visual_basis
 
-						# Debug: Print which container we're using for visual
-						if Engine.get_frames_drawn() % 60 == 0:  # Every 60 frames
-							print("[CHAR VISUAL] In container: ", container.name, " proxy_pos: ", proxy_pos, " world_pos: ", world_pos)
 						break
-
-		if not found_container and Engine.get_frames_drawn() % 60 == 0:
-			print("[CHAR VISUAL] ERROR: In container but no matching container found!")
 	elif is_in_vehicle and proxy_body.is_valid():
 		# Character in vehicle interior - position relative to vehicle
 		var proxy_transform: Transform3D = PhysicsServer3D.body_get_state(proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
@@ -272,15 +263,16 @@ func _update_character_visual_position(delta: float) -> void:
 						# Find which container the ship is docked in
 						var docked_container = vehicle._get_docked_container()
 						if docked_container and docked_container.exterior_body:
-							var container_transform = docked_container.exterior_body.global_transform
-							var container_basis = container_transform.basis
+							# CRITICAL: Use recursive transform to handle nested containers
+							var container_world_transform = VehicleContainer.get_world_transform(docked_container)
+							var container_basis = container_world_transform.basis
 
 							# Update target to track ship's orientation in world space
 							var ship_world_basis = container_basis * ship_dock_transform.basis
 							target_visual_basis = ship_world_basis
 
-							# Transform to world space
-							var world_pos = container_transform.origin + container_basis * container_proxy_pos
+							# Transform to world space through (potentially nested) container
+							var world_pos = container_world_transform.origin + container_basis * container_proxy_pos
 							character_visual.global_position = world_pos
 							# Use transitioning basis (smoothly follows target)
 							character_visual.global_transform.basis = current_visual_basis

@@ -438,10 +438,11 @@ func _update_vehicle_visual_position() -> void:
 		# Get parent container
 		var container = _get_docked_container()
 		if container and container.exterior_body:
-			var container_transform = container.exterior_body.global_transform
+			# Use recursive helper to get container's world transform (handles nested containers)
+			var container_world_transform = VehicleContainer.get_world_transform(container)
 
 			# Transform proxy position (in container's interior space) to world space
-			var world_transform = container_transform * proxy_transform
+			var world_transform = container_world_transform * proxy_transform
 
 			# Update exterior body to match proxy position
 			exterior_body.global_transform = world_transform
@@ -485,12 +486,13 @@ func apply_thrust(direction: Vector3, force: float) -> void:
 	if is_docked and dock_proxy_body.is_valid():
 		# Apply thrust in proxy interior space
 		# Direction comes in world space from exterior_body.basis
-		# Need to transform to proxy space where dock_proxy_body lives
+		# Need to transform to the space where dock_proxy_body exists
 		var container = _get_docked_container()
-		if container and container.exterior_body:
-			var container_transform = container.exterior_body.global_transform
-			# Transform world direction to container local (which matches proxy space orientation)
-			var proxy_direction = container_transform.basis.inverse() * direction
+		if container:
+			# CRITICAL: Use recursive world transform to handle nested containers
+			var container_world_transform = VehicleContainer.get_world_transform(container)
+			# Transform world direction to container's interior space
+			var proxy_direction = container_world_transform.basis.inverse() * direction
 
 			# Full thrust power when docked, but clamp resulting velocity to safe limits
 			var mass = PhysicsServer3D.body_get_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_MASS)
@@ -512,11 +514,12 @@ func apply_thrust(direction: Vector3, force: float) -> void:
 func apply_rotation(axis: Vector3, torque: float) -> void:
 	if is_docked and dock_proxy_body.is_valid():
 		# Apply rotation in proxy interior space
-		# Axis comes in world space, need to transform to container local space
+		# Axis comes in world space, need to transform to container's interior space
 		var container = _get_docked_container()
-		if container and container.exterior_body:
-			var container_transform = container.exterior_body.global_transform
-			var local_axis = container_transform.basis.inverse() * axis
+		if container:
+			# CRITICAL: Use recursive world transform to handle nested containers
+			var container_world_transform = VehicleContainer.get_world_transform(container)
+			var local_axis = container_world_transform.basis.inverse() * axis
 
 			# Full rotation power when docked, but clamp resulting angular velocity
 			var mass = PhysicsServer3D.body_get_param(dock_proxy_body, PhysicsServer3D.BODY_PARAM_MASS)
@@ -531,9 +534,6 @@ func apply_rotation(axis: Vector3, torque: float) -> void:
 			new_angvel.z = clamp(new_angvel.z, -3.0, 3.0)
 
 			PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, new_angvel)
-			print("[VEHICLE] Applied rotation to DOCKED ship - new_angvel: ", new_angvel)
-		else:
-			print("[VEHICLE] Docked but no container found!")
 	elif exterior_body:
 		# Apply rotation in world - use same physics as docked for consistency
 		var mass = exterior_body.mass

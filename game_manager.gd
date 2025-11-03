@@ -28,6 +28,19 @@ const FPS_UPDATE_INTERVAL: float = 0.25  # Update FPS display 4 times per second
 var space_sleep_check_timer: float = 0.0
 const SPACE_SLEEP_CHECK_INTERVAL: float = 1.0  # Check every second if spaces can sleep
 
+# Physics and geometry constants
+const SHIP_HALF_LENGTH: float = 15.0  # Ship is 30 units long (±15 from center)
+const SHIP_RE_ENTRY_DISTANCE: float = 12.0  # Distance within which player can re-enter ship
+const PLAYER_ENTRY_DEPTH: float = 2.0  # How far player must be inside container to trigger entry
+const PLAYER_ENTRY_MARGIN: float = 1.0  # Margin for player entry detection
+const CONTAINER_SIZE_SCALE: float = 3.0  # Base size multiplier for containers
+const CONTAINER_Z_BUFFER: float = 5.0  # Extra buffer past container front for ship exit detection
+const EXIT_HYSTERESIS_MARGIN: float = 0.1  # Small gap between entry and exit zones
+const ORIENTATION_THRESHOLD: float = 0.95  # Dot product threshold for reorientation (cos ~18°)
+const VELOCITY_THRESHOLD: float = 1.0  # Minimum velocity to trigger transition
+const INTERIOR_BOUNDS_MARGIN: float = 1.0  # Margin from walls to prevent clipping
+const EXIT_MARGIN: float = 1.0  # Margin past boundary to confirm exit
+
 func _debounced_log(category: String, message: String, data: Dictionary) -> void:
 	# Only log if different data or enough time has passed
 	var current_time = Time.get_ticks_msec() / 1000.0
@@ -681,7 +694,7 @@ func _check_transitions() -> void:
 				var ship_up = ship_basis.y
 				var world_up = Vector3.UP
 				var up_dot = ship_up.dot(world_up)
-				var needs_reorientation = up_dot < 0.95
+				var needs_reorientation = up_dot < ORIENTATION_THRESHOLD
 
 				# Adjust camera yaw to compensate for ship's rotation
 				# Get ship's yaw rotation relative to world
@@ -695,16 +708,8 @@ func _check_transitions() -> void:
 				# When ship is upside down, we want character to reorient to ship's UP
 				var target_basis: Basis
 				if needs_reorientation:
-					# Get camera's forward direction and construct basis with ship's UP
 					var camera_forward = dual_camera.get_forward_direction()
-					var local_forward = ship_basis.inverse() * camera_forward
-					local_forward = local_forward.normalized()
-
-					# Construct basis using ship's local UP (Y-axis in local space)
-					var local_up = Vector3.UP
-					var local_right = local_forward.cross(local_up).normalized()
-					local_forward = local_right.cross(local_up).normalized()
-					target_basis = Basis(local_right, local_up, local_forward)
+					target_basis = _construct_reorientation_basis(camera_forward, ship_basis)
 				else:
 					target_basis = Basis.IDENTITY
 
@@ -765,7 +770,7 @@ func _check_transitions() -> void:
 							var container_world_transform = VehicleContainer.get_world_transform(ship_docked_container)
 							var container_up = container_world_transform.basis.y
 							var up_dot = ship_up.dot(container_up)
-							var needs_reorientation = up_dot < 0.95
+							var needs_reorientation = up_dot < ORIENTATION_THRESHOLD
 
 							# Adjust camera yaw to compensate for ship's rotation relative to container
 							# Get ship's yaw rotation relative to container
@@ -780,13 +785,7 @@ func _check_transitions() -> void:
 							var target_basis: Basis
 							if needs_reorientation:
 								var camera_forward = dual_camera.get_forward_direction()
-								var local_forward = ship_basis.inverse() * camera_forward
-								local_forward = local_forward.normalized()
-
-								var local_up = Vector3.UP
-								var local_right = local_forward.cross(local_up).normalized()
-								local_forward = local_right.cross(local_up).normalized()
-								target_basis = Basis(local_right, local_up, local_forward)
+								target_basis = _construct_reorientation_basis(camera_forward, ship_basis)
 							else:
 								target_basis = Basis.IDENTITY
 
@@ -870,16 +869,10 @@ func _check_transitions() -> void:
 						var current_world_transform = VehicleContainer.get_world_transform(current_container)
 						var current_up = current_world_transform.basis.y
 						var up_dot = docked_up.dot(current_up)
-						var needs_reorientation = up_dot < 0.95
+						var needs_reorientation = up_dot < ORIENTATION_THRESHOLD
 
 						# CRITICAL: Camera tracks the IMMEDIATE container player is entering
-						if is_instance_valid(dual_camera):
-							if dual_camera.vehicle_container != docked_container:
-								dual_camera.vehicle_container = docked_container
-
-							# Set camera up direction to immediate container's up (in world space)
-							var container_up = docked_world_transform.basis.y
-							dual_camera.set_target_up_direction(container_up)
+						_set_camera_to_track_container(docked_container)
 
 						# Adjust camera yaw to compensate for docked container's rotation
 						var current_basis = current_world_transform.basis
@@ -891,29 +884,14 @@ func _check_transitions() -> void:
 						var target_basis: Basis
 						if needs_reorientation:
 							var camera_forward = dual_camera.get_forward_direction()
-							var local_forward = docked_basis.inverse() * camera_forward
-							local_forward = local_forward.normalized()
-
-							var local_up = Vector3.UP
-							var local_right = local_forward.cross(local_up).normalized()
-							local_forward = local_right.cross(local_up).normalized()
-							target_basis = Basis(local_right, local_up, local_forward)
+							target_basis = _construct_reorientation_basis(camera_forward, docked_world_transform)
 						else:
 							target_basis = Basis.IDENTITY
-
-						# Debug: Check container state and position
-						print("[DOCKED CONTAINER ENTRY] Container: ", docked_container.name, " is_docked=", docked_container.is_docked)
-						print("[DOCKED CONTAINER ENTRY] Position in container: ", container_local_pos)
-						print("[DOCKED CONTAINER ENTRY] Container space active: ", PhysicsServer3D.space_is_active(docked_space))
-						print("[DOCKED CONTAINER ENTRY] Character proxy_body space before: ", PhysicsServer3D.body_get_space(character.proxy_body))
 
 						character.enter_container(needs_reorientation, target_basis)
 
 						# UNIVERSAL: No position clamping - seamless physics-based positioning
 						character.set_proxy_position(container_local_pos, container_local_velocity)
-
-						print("[DOCKED CONTAINER ENTRY] After: Character proxy_body space: ", PhysicsServer3D.body_get_space(character.proxy_body))
-						print("[DOCKED CONTAINER ENTRY] Container space: ", docked_space)
 
 						# Break after entering one container
 						break
@@ -944,7 +922,7 @@ func _check_transitions() -> void:
 			# UNIVERSAL: Match tight vehicle hysteresis pattern (5 unit entry depth)
 			# Vehicle: entry 10-15 (5 units), exit 15.1 (0.1 past entry)
 			# Container: entry (half_length-5) to half_length (5 units), exit half_length+0.1
-			var exit_threshold = half_length + 0.1
+			var exit_threshold = half_length + EXIT_HYSTERESIS_MARGIN
 
 			# Check exit using universal helper
 			var should_exit = _check_interior_exit(
@@ -970,7 +948,7 @@ func _check_transitions() -> void:
 					# CRITICAL: Only re-enter ship if VERY close (within ~12 units) AND not at exit threshold
 					# This allows exiting container even with docked ship inside
 					# Ship is ~9 units tall, so 12 units is close proximity
-					if dist_to_ship < 12.0 and proxy_pos.z < exit_threshold:
+					if dist_to_ship < SHIP_RE_ENTRY_DISTANCE and proxy_pos.z < exit_threshold:
 						entering_docked_ship = true
 
 						# Transform from container space to ship local space
@@ -994,7 +972,7 @@ func _check_transitions() -> void:
 						var container_world_transform = VehicleContainer.get_world_transform(container)
 						var container_up = container_world_transform.basis.y
 						var up_dot = ship_up.dot(container_up)
-						var needs_reorientation = up_dot < 0.95
+						var needs_reorientation = up_dot < ORIENTATION_THRESHOLD
 
 						# Adjust camera yaw to compensate for ship's rotation relative to container
 						var container_basis = container_world_transform.basis
@@ -1008,13 +986,7 @@ func _check_transitions() -> void:
 						var target_basis: Basis
 						if needs_reorientation:
 							var camera_forward = dual_camera.get_forward_direction()
-							var local_forward = ship_basis.inverse() * camera_forward
-							local_forward = local_forward.normalized()
-
-							var local_up = Vector3.UP
-							var local_right = local_forward.cross(local_up).normalized()
-							local_forward = local_right.cross(local_up).normalized()
-							target_basis = Basis(local_right, local_up, local_forward)
+							target_basis = _construct_reorientation_basis(camera_forward, ship_basis)
 						else:
 							target_basis = Basis.IDENTITY
 
@@ -1038,8 +1010,8 @@ func _check_transitions() -> void:
 						# Transform player's current position in child container to parent container space
 						# player position in child = proxy_pos
 						# player position in parent = container_dock_transform * proxy_pos
-						var parent_proxy_pos = container_dock_transform.origin + container_dock_transform.basis * proxy_pos
-						var parent_proxy_velocity = container_dock_transform.basis * proxy_velocity
+						var parent_proxy_pos = _transform_to_world_space(container_dock_transform, proxy_pos)
+						var parent_proxy_velocity = _transform_velocity_to_world_space(container_dock_transform, proxy_velocity)
 
 						# Exit current container
 						character.exit_container()
@@ -1054,7 +1026,7 @@ func _check_transitions() -> void:
 						var container_up = container_world_transform.basis.y
 						var parent_up = parent_world_transform.basis.y
 						var up_dot = container_up.dot(parent_up)
-						var needs_reorientation = up_dot < 0.95
+						var needs_reorientation = up_dot < ORIENTATION_THRESHOLD
 
 						# Adjust camera yaw
 						var container_basis = container_world_transform.basis
@@ -1067,12 +1039,7 @@ func _check_transitions() -> void:
 						var target_basis: Basis
 						if needs_reorientation:
 							var camera_forward = dual_camera.get_forward_direction()
-							var local_forward = parent_basis.inverse() * camera_forward
-							local_forward = local_forward.normalized()
-							var local_up = Vector3.UP
-							var local_right = local_forward.cross(local_up).normalized()
-							local_forward = local_right.cross(local_up).normalized()
-							target_basis = Basis(local_right, local_up, local_forward)
+							target_basis = _construct_reorientation_basis(camera_forward, parent_basis)
 						else:
 							target_basis = Basis.IDENTITY
 
@@ -1091,10 +1058,10 @@ func _check_transitions() -> void:
 						# Calculate world position for exit
 						# CRITICAL: Use recursive transform in case container is nested
 						var container_world_transform = VehicleContainer.get_world_transform(container)
-						var world_velocity = container_world_transform.basis * proxy_velocity
+						var world_velocity = _transform_velocity_to_world_space(container_world_transform, proxy_velocity)
 
 						# Use player's actual position for seamless exit (no teleporting)
-						var world_pos = container_world_transform.origin + container_world_transform.basis * proxy_pos
+						var world_pos = _transform_to_world_space(container_world_transform, proxy_pos)
 
 						# Get forward direction in world space (container's +Z is forward)
 						var exit_forward = container_world_transform.basis.z
@@ -1109,7 +1076,7 @@ func _check_transitions() -> void:
 						var container_up = container_world_transform.basis.y
 						var world_up = Vector3.UP
 						var up_dot = container_up.dot(world_up)
-						var needs_reorientation = up_dot < 0.95
+						var needs_reorientation = up_dot < ORIENTATION_THRESHOLD
 
 						# Reverse the camera yaw adjustment we made on entry (same as vehicle)
 						# Get container's yaw rotation relative to world
@@ -1123,13 +1090,7 @@ func _check_transitions() -> void:
 						var exit_basis: Basis
 						if needs_reorientation:
 							var camera_forward = dual_camera.get_forward_direction()
-							var local_forward = camera_forward
-							local_forward = local_forward.normalized()
-
-							var local_up = Vector3.UP
-							var local_right = local_forward.cross(local_up).normalized()
-							local_forward = local_right.cross(local_up).normalized()
-							exit_basis = Basis(local_right, local_up, local_forward)
+							exit_basis = _construct_reorientation_basis(camera_forward, Basis.IDENTITY)
 						else:
 							exit_basis = Basis.IDENTITY
 
@@ -1137,9 +1098,7 @@ func _check_transitions() -> void:
 						character.exit_container(needs_reorientation, exit_basis)
 
 						# Transition camera up direction back to world up and clear container tracking
-						if is_instance_valid(dual_camera):
-							dual_camera.set_target_up_direction(Vector3.UP)
-							dual_camera.vehicle_container = null  # Clear container tracking when in world
+						_clear_camera_container_tracking()
 
 						# UNIVERSAL: No clamping - player lands on ship exterior collider during transition
 						character.set_world_position(world_pos, world_velocity)
@@ -1196,7 +1155,7 @@ func _check_transitions() -> void:
 						var ship_dock_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
 						# Transform ship proxy pos (in ship's interior space) to container space
-						container_proxy_pos = ship_dock_transform.origin + ship_dock_transform.basis * ship_proxy_pos
+						container_proxy_pos = _transform_to_world_space(ship_dock_transform, ship_proxy_pos)
 
 
 						# Calculate container bounds dynamically based on size
@@ -1228,8 +1187,8 @@ func _check_transitions() -> void:
 				else:
 						# Ship NOT docked - calculate world position from exterior body
 						var vehicle_transform = vehicle.exterior_body.global_transform
-						world_pos = vehicle_transform.origin + vehicle_transform.basis * ship_proxy_pos
-						world_velocity = vehicle_transform.basis * proxy_velocity
+						world_pos = _transform_to_world_space(vehicle_transform, ship_proxy_pos)
+						world_velocity = _transform_velocity_to_world_space(vehicle_transform, proxy_velocity)
 
 				# Now exit vehicle (do this AFTER checking container, but BEFORE state change)
 				# Check if ship's UP is significantly different from target space UP
@@ -1264,7 +1223,7 @@ func _check_transitions() -> void:
 
 				# Check if orientation transition is needed (for UP direction only)
 				var up_dot = target_up.dot(ship_up)
-				var needs_reorientation = up_dot < 0.95
+				var needs_reorientation = up_dot < ORIENTATION_THRESHOLD
 
 				# Reverse the camera yaw adjustment we made on entry
 				# Get ship's yaw rotation relative to target space
@@ -1279,13 +1238,7 @@ func _check_transitions() -> void:
 				var exit_basis: Basis
 				if needs_reorientation:
 					var camera_forward = dual_camera.get_forward_direction()
-					var local_forward = target_basis.inverse() * camera_forward
-					local_forward = local_forward.normalized()
-
-					var local_up = Vector3.UP
-					var local_right = local_forward.cross(local_up).normalized()
-					local_forward = local_right.cross(local_up).normalized()
-					exit_basis = Basis(local_right, local_up, local_forward)
+					exit_basis = _construct_reorientation_basis(camera_forward, target_basis)
 				else:
 					exit_basis = Basis.IDENTITY
 
@@ -1303,24 +1256,9 @@ func _check_transitions() -> void:
 					var ship_dock_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 					var container_velocity = ship_dock_transform.basis * proxy_velocity
 
-					print("[SHIP EXIT DEBUG] Entering container: ", target_container.name)
-					print("[SHIP EXIT DEBUG] Container is_docked: ", target_container.is_docked)
-					print("[SHIP EXIT DEBUG] Ship dock_proxy_body space: ", PhysicsServer3D.body_get_space(vehicle.dock_proxy_body))
-					print("[SHIP EXIT DEBUG] Target container interior space: ", target_container.get_interior_space())
-					print("[SHIP EXIT DEBUG] Container proxy position: ", container_proxy_pos)
-
 					# CRITICAL: Adjust camera orientation for ship->container transition
 					# Camera should track the container player is actually in, not outermost
-					if is_instance_valid(dual_camera) and target_container and target_container.exterior_body:
-						# CRITICAL: Camera tracks the IMMEDIATE container player is in
-						# For PiP to work, it needs to know which container space player is inside
-						if dual_camera.vehicle_container != target_container:
-							dual_camera.vehicle_container = target_container
-
-						# Set camera up direction to immediate container's up (in world space)
-						var container_world_transform = VehicleContainer.get_world_transform(target_container)
-						var container_up = container_world_transform.basis.y
-						dual_camera.set_target_up_direction(container_up)
+					_set_camera_to_track_container(target_container)
 
 					# Activate and enter container interior space (UNIVERSAL HELPER)
 					var container_space = target_container.get_interior_space()
@@ -1335,17 +1273,8 @@ func _check_transitions() -> void:
 					# Hysteresis (position + velocity checks) prevents unwanted transitions
 					# Seamless physics-based transitions with no forced positioning
 
-					# Debug: Check container state and position
-					print("[SHIP->CONTAINER EXIT] Container: ", target_container.name, " is_docked=", target_container.is_docked)
-					print("[SHIP->CONTAINER EXIT] Position in container: ", container_proxy_pos)
-					print("[SHIP->CONTAINER EXIT] Container space active: ", PhysicsServer3D.space_is_active(container_space))
-					print("[SHIP->CONTAINER EXIT] Character proxy_body space: ", PhysicsServer3D.body_get_space(character.proxy_body))
-
 					character.enter_container(needs_reorientation, exit_basis)
 					character.set_proxy_position(container_proxy_pos, container_velocity)
-
-					print("[SHIP->CONTAINER EXIT] After: Character proxy_body space: ", PhysicsServer3D.body_get_space(character.proxy_body))
-					print("[SHIP->CONTAINER EXIT] Container space: ", container_space)
 				else:
 					# Exit position is outside container OR ship not docked - exit to world space
 
@@ -1415,15 +1344,10 @@ func _check_transitions() -> void:
 				var container_up = container_basis.y
 				var world_up = Vector3.UP
 				var up_dot = container_up.dot(world_up)
-				var needs_reorientation = up_dot < 0.95
+				var needs_reorientation = up_dot < ORIENTATION_THRESHOLD
 
 				# CRITICAL: Camera tracks the container player is entering
-				if is_instance_valid(dual_camera):
-					if dual_camera.vehicle_container != container:
-						dual_camera.vehicle_container = container
-
-					# Set camera up direction to container's up (in world space)
-					dual_camera.set_target_up_direction(container_up)
+				_set_camera_to_track_container(container)
 
 				# Adjust camera yaw to compensate for container's rotation (same as vehicle)
 				var container_forward_world = container_basis.z
@@ -1437,14 +1361,7 @@ func _check_transitions() -> void:
 				if needs_reorientation:
 					# Get camera's forward direction and construct basis with container's UP
 					var camera_forward = dual_camera.get_forward_direction()
-					var local_forward = container_basis.inverse() * camera_forward
-					local_forward = local_forward.normalized()
-
-					# Construct basis using container's local UP (Y-axis in local space)
-					var local_up = Vector3.UP
-					var local_right = local_forward.cross(local_up).normalized()
-					local_forward = local_right.cross(local_up).normalized()
-					target_basis = Basis(local_right, local_up, local_forward)
+					target_basis = _construct_reorientation_basis(camera_forward, container_basis)
 				else:
 					target_basis = Basis.IDENTITY
 
@@ -1487,11 +1404,11 @@ func _check_transitions() -> void:
 			# Docking zone with HYSTERESIS - scaled by container size
 			# CRITICAL: Docking bounds must be SMALLER than exterior collision to prevent
 			# Container interior bounds (scaled by size_multiplier)
-			# Small 1-unit margin to prevent floor/wall clipping physics glitches
-			var size_scale = 3.0 * container.size_multiplier
-			var half_width = 3.0 * size_scale - 1.0  # 1 unit margin to prevent wall clipping
-			var half_height = 1.5 * size_scale - 1.0  # 1 unit margin to prevent floor/ceiling clipping
-			var half_length = 5.0 * size_scale - 1.0  # 1 unit margin from back wall
+			# Get container interior bounds with safety margins
+			var bounds = _get_container_bounds(container)
+			var half_width = bounds["half_width"]
+			var half_height = bounds["half_height"]
+			var half_length = bounds["half_length"]
 
 			# UNIVERSAL: Entry when ENTIRE ship is inside
 			# Ship collision box is 30 units long (±15 from center)
@@ -1499,12 +1416,11 @@ func _check_transitions() -> void:
 			# For ship back to be inside: ship_center.z - 15 < half_length
 			# Therefore: ship_center.z < half_length + 15
 			# No safety margin needed - hysteresis (position + velocity) prevents unwanted transitions
-			var ship_half_length = 15.0  # Ship is 30 units long (±15 from center)
-			var enter_z = half_length - ship_half_length   # Entire ship just inside, no extra margin
+			var enter_z = half_length - SHIP_HALF_LENGTH   # Entire ship just inside, no extra margin
 
 			# CRITICAL: Tight exit hysteresis (0.1 units past entry zone)
 			# Exit when ship center reaches opening
-			var exit_z = half_length + 0.1  # Exit 0.1 units past opening (tight hysteresis)
+			var exit_z = half_length + EXIT_HYSTERESIS_MARGIN  # Exit just past opening (tight hysteresis)
 
 			# Check bounds - use interior bounds (already has 1 unit margin from walls/floor)
 			var x_inside = abs(local_pos.x) < half_width
@@ -1667,6 +1583,73 @@ func _check_transitions() -> void:
 ## ============================================================================
 
 ## Activate an interior physics space and assign character's proxy body to it
+## HELPER FUNCTIONS FOR COMMON OPERATIONS
+
+## Transform a local position to world space using a transform
+func _transform_to_world_space(local_transform: Transform3D, local_pos: Vector3) -> Vector3:
+	return local_transform.origin + local_transform.basis * local_pos
+
+## Transform a local velocity to world space using a transform
+func _transform_velocity_to_world_space(local_transform: Transform3D, local_velocity: Vector3) -> Vector3:
+	return local_transform.basis * local_velocity
+
+## Calculate container interior bounds based on size multiplier
+func _get_container_bounds(container: VehicleContainer) -> Dictionary:
+	var size_scale = CONTAINER_SIZE_SCALE * container.size_multiplier
+	return {
+		"half_width": 3.0 * size_scale - INTERIOR_BOUNDS_MARGIN,
+		"half_height": 1.5 * size_scale - INTERIOR_BOUNDS_MARGIN,
+		"half_length": 5.0 * size_scale - INTERIOR_BOUNDS_MARGIN,
+		"size_scale": size_scale
+	}
+
+## Set camera to track a specific container
+func _set_camera_to_track_container(container: VehicleContainer) -> void:
+	if not is_instance_valid(dual_camera) or not container:
+		return
+
+	if dual_camera.vehicle_container != container:
+		dual_camera.vehicle_container = container
+
+	var world_transform = VehicleContainer.get_world_transform(container)
+	dual_camera.set_target_up_direction(world_transform.basis.y)
+
+## Clear camera container tracking (for world space)
+func _clear_camera_container_tracking() -> void:
+	if is_instance_valid(dual_camera):
+		dual_camera.set_target_up_direction(Vector3.UP)
+		dual_camera.vehicle_container = null
+
+## Check if orientation transition is needed between two transforms
+func _needs_orientation_transition(from_transform: Transform3D, to_transform: Transform3D) -> bool:
+	var from_up = from_transform.basis.y
+	var to_up = to_transform.basis.y
+	return from_up.dot(to_up) < ORIENTATION_THRESHOLD
+
+## Adjust camera yaw for rotation between two bases
+func _adjust_camera_yaw_for_rotation(from_basis: Basis, to_basis: Basis, reverse: bool = false) -> void:
+	if not is_instance_valid(dual_camera):
+		return
+
+	var to_forward_in_from = from_basis.inverse() * to_basis.z
+	var yaw_delta = atan2(to_forward_in_from.x, to_forward_in_from.z)
+
+	if reverse:
+		dual_camera.base_rotation.y += yaw_delta
+	else:
+		dual_camera.base_rotation.y -= yaw_delta
+
+## Construct target basis for reorientation
+func _construct_reorientation_basis(camera_forward: Vector3, target_basis: Basis) -> Basis:
+	var local_forward = target_basis.inverse() * camera_forward
+	local_forward = local_forward.normalized()
+
+	var local_up = Vector3.UP
+	var local_right = local_forward.cross(local_up).normalized()
+	local_forward = local_right.cross(local_up).normalized()
+
+	return Basis(local_right, local_up, local_forward)
+
 func _activate_and_enter_interior_space(interior_space: RID) -> void:
 	if not PhysicsServer3D.space_is_active(interior_space):
 		PhysicsServer3D.space_set_active(interior_space, true)
@@ -1739,7 +1722,7 @@ func _construct_orientation_basis_preserving_facing(
 	"""
 	# Check if UP directions differ significantly
 	var up_dot = target_up.dot(source_up)
-	var should_transition = up_dot < 0.95
+	var should_transition = up_dot < ORIENTATION_THRESHOLD
 
 	# Project current forward onto plane perpendicular to target UP
 	# This preserves the horizontal facing direction

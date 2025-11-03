@@ -209,6 +209,7 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 
 	# Floor - match container collider position (relative coordinates)
 	var floor_mesh := MeshInstance3D.new()
+	floor_mesh.name = "Floor"
 	floor_mesh.mesh = BoxMesh.new()
 	floor_mesh.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
 	floor_mesh.material_override = floor_material
@@ -217,6 +218,7 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 
 	# Left wall - match container collider position
 	var left_wall := MeshInstance3D.new()
+	left_wall.name = "LeftWall"
 	left_wall.mesh = BoxMesh.new()
 	left_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
 	left_wall.material_override = wall_material
@@ -225,6 +227,7 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 
 	# Right wall - match container collider position
 	var right_wall := MeshInstance3D.new()
+	right_wall.name = "RightWall"
 	right_wall.mesh = BoxMesh.new()
 	right_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
 	right_wall.material_override = wall_material
@@ -233,6 +236,7 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 
 	# Back wall - match container collider position
 	var back_wall := MeshInstance3D.new()
+	back_wall.name = "BackWall"
 	back_wall.mesh = BoxMesh.new()
 	back_wall.mesh.size = Vector3(3.0 * size_scale * 2, 2.5 * size_scale, 0.1)
 	back_wall.material_override = wall_material
@@ -241,6 +245,7 @@ func _create_station_proxy_interior_scene(viewport: SubViewport) -> void:
 
 	# Ceiling - match container collider position
 	var ceiling := MeshInstance3D.new()
+	ceiling.name = "Ceiling"
 	ceiling.mesh = BoxMesh.new()
 	ceiling.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
 	ceiling.material_override = wall_material
@@ -658,6 +663,45 @@ func _update_external_camera() -> void:
 	external_camera.look_at(look_target, Vector3.UP)
 
 
+func _update_station_wireframe_size(size_scale: float) -> void:
+	# Dynamically resize the station wireframe to match the actual container being viewed
+	if not is_instance_valid(dock_interior_viewport):
+		return
+
+	var visuals = dock_interior_viewport.get_node_or_null("StationProxyInteriorVisuals")
+	if not visuals:
+		return
+
+	# Update floor
+	var floor_mesh = visuals.get_node_or_null("Floor")
+	if floor_mesh and floor_mesh.mesh:
+		floor_mesh.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
+		floor_mesh.position = Vector3(0, -1.4 * size_scale, 0)
+
+	# Update left wall
+	var left_wall = visuals.get_node_or_null("LeftWall")
+	if left_wall and left_wall.mesh:
+		left_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
+		left_wall.position = Vector3(-3.0 * size_scale, 0, 0)
+
+	# Update right wall
+	var right_wall = visuals.get_node_or_null("RightWall")
+	if right_wall and right_wall.mesh:
+		right_wall.mesh.size = Vector3(0.1, 2.5 * size_scale, 5.0 * size_scale * 2)
+		right_wall.position = Vector3(3.0 * size_scale, 0, 0)
+
+	# Update back wall
+	var back_wall = visuals.get_node_or_null("BackWall")
+	if back_wall and back_wall.mesh:
+		back_wall.mesh.size = Vector3(3.0 * size_scale * 2, 2.5 * size_scale, 0.1)
+		back_wall.position = Vector3(0, 0, -5.0 * size_scale)
+
+	# Update ceiling
+	var ceiling = visuals.get_node_or_null("Ceiling")
+	if ceiling and ceiling.mesh:
+		ceiling.mesh.size = Vector3(3.0 * size_scale * 2, 0.1, 5.0 * size_scale * 2)
+		ceiling.position = Vector3(0, 1.4 * size_scale, 0)
+
 func _get_outermost_container() -> VehicleContainer:
 	# Find the highest level (outermost) container in the nesting hierarchy
 	# Start with the container the player/vehicle is in, then check if that container is docked
@@ -701,6 +745,9 @@ func _update_dock_interior_camera() -> void:
 
 	# Use the outermost container's size for camera positioning
 	var size_scale = 3.0 * outermost_container.size_multiplier
+
+	# CRITICAL: Update wireframe geometry to match actual container size
+	_update_station_wireframe_size(size_scale)
 
 	# Position camera at back of container interior, elevated but not too high
 	# Floor is at y = -1.5 * size_scale + 0.1
@@ -778,17 +825,29 @@ func _update_proxy_character_visuals() -> void:
 				# Character is in docked vehicle - transform from ship space to container space
 				# CRITICAL: Use physics space transforms, not world transforms
 				# proxy_pos is in ship's interior space
-				# We need to transform to container's interior space
+				# We need to transform to container's interior space (potentially nested)
 				if vehicle.dock_proxy_body.is_valid():
-					# Get ship's dock proxy transform (ship's position in container's interior space)
+					# Get ship's dock proxy transform (ship's position in immediate container's space)
 					var ship_dock_transform: Transform3D = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-					# Transform character position from ship interior space to container interior space
-					# Character proxy_pos is relative to ship's interior origin
-					# Ship's dock_proxy_body position is in container's interior space
-					var container_local_pos = ship_dock_transform.origin + ship_dock_transform.basis * proxy_pos
+					# Transform character from ship interior space to immediate container space
+					var char_in_container = ship_dock_transform.origin + ship_dock_transform.basis * proxy_pos
 
-					station_char_visual.position = container_local_pos
+					# CRITICAL: Check if ship's container is itself docked
+					# If nested, we need to transform through multiple levels to reach outermost container
+					var immediate_container = vehicle._get_docked_container()
+					if immediate_container and immediate_container.is_docked and immediate_container.dock_proxy_body.is_valid():
+						# Ship is in a container that's docked in another container
+						# Transform from immediate container space to outermost container space
+						var container_dock_transform: Transform3D = PhysicsServer3D.body_get_state(immediate_container.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+
+						# Final position = transform character position through container's dock transform
+						var final_pos = container_dock_transform.origin + container_dock_transform.basis * char_in_container
+
+						station_char_visual.position = final_pos
+					else:
+						# Ship is in a non-docked container - use position directly
+						station_char_visual.position = char_in_container
 
 		# Update vehicle visual in station interior viewport
 		var station_vehicle_visual = dock_interior_viewport.get_node_or_null("StationProxyInteriorVisuals/VehicleProxyVisual")
@@ -796,16 +855,26 @@ func _update_proxy_character_visuals() -> void:
 			# Show vehicle if it's docked
 			station_vehicle_visual.visible = is_instance_valid(vehicle) and vehicle.is_docked
 			if is_instance_valid(vehicle) and vehicle.is_docked and vehicle.dock_proxy_body.is_valid():
-				# Get position directly from dock proxy body (in container local space)
-				var dock_transform: Transform3D = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+				# Get ship's dock proxy transform (in its immediate container's space)
+				var ship_dock_transform: Transform3D = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-				# With recursive nesting, dock_transform is already in container's interior space
-				# which uses the same coordinate system as the visual geometry
-				# No Y offset needed
-				var station_proxy_pos = dock_transform.origin
+				# CRITICAL: Check if ship is in a nested container
+				# If the container it's docked in is itself docked, we need to transform through multiple levels
+				var immediate_container = vehicle._get_docked_container()
+				if immediate_container and immediate_container.is_docked and immediate_container.dock_proxy_body.is_valid():
+					# Ship is in a container that's docked in another container
+					# Transform ship position from immediate container space to outermost container space
+					var container_dock_transform: Transform3D = PhysicsServer3D.body_get_state(immediate_container.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 
-				station_vehicle_visual.position = station_proxy_pos
-				station_vehicle_visual.transform.basis = dock_transform.basis
+					# Combined transform: ship in outermost container = container_transform * ship_transform
+					var combined_transform = container_dock_transform * ship_dock_transform
+
+					station_vehicle_visual.position = combined_transform.origin
+					station_vehicle_visual.transform.basis = combined_transform.basis
+				else:
+					# Ship is in a non-docked container - use direct transform
+					station_vehicle_visual.position = ship_dock_transform.origin
+					station_vehicle_visual.transform.basis = ship_dock_transform.basis
 
 		# Update docked container visual in station interior viewport
 		var station_container_visual = dock_interior_viewport.get_node_or_null("StationProxyInteriorVisuals/ContainerProxyVisual")

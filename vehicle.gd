@@ -147,9 +147,10 @@ func _create_vehicle_physics_space() -> void:
 	PhysicsServer3D.space_set_active(vehicle_interior_space, false)  # Start inactive, activate on demand
 
 	# Create gravity area for this vehicle's interior
+	# UNIVERSAL: Match world gravity (9.81) for consistency across all spaces
 	var gravity_area = PhysicsServer3D.area_create()
 	PhysicsServer3D.area_set_space(gravity_area, vehicle_interior_space)
-	PhysicsServer3D.area_set_param(gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY, 9.8)
+	PhysicsServer3D.area_set_param(gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY, 9.81)
 	PhysicsServer3D.area_set_param(gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY_VECTOR, Vector3(0, -1, 0))
 	PhysicsServer3D.area_set_param(gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY_IS_POINT, false)
 
@@ -247,9 +248,9 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.body_set_collision_mask(floor_body, 1)
 	interior_proxy_colliders.append(floor_body)
 
-	# Left wall collider - matches floor length and width
+	# Left wall collider - full height to match exterior
 	var left_wall_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.05, 1.25 * size_scale, 5.0 * size_scale))
+	PhysicsServer3D.shape_set_data(left_wall_shape, Vector3(0.1, 1.5 * size_scale, 5.0 * size_scale))
 
 	var left_wall_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(left_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
@@ -261,9 +262,9 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.body_set_collision_mask(left_wall_body, 1)
 	interior_proxy_colliders.append(left_wall_body)
 
-	# Right wall collider - matches floor length and width
+	# Right wall collider - full height to match exterior
 	var right_wall_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.05, 1.25 * size_scale, 5.0 * size_scale))
+	PhysicsServer3D.shape_set_data(right_wall_shape, Vector3(0.1, 1.5 * size_scale, 5.0 * size_scale))
 
 	var right_wall_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(right_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
@@ -275,9 +276,9 @@ func _create_proxy_interior_colliders() -> void:
 	PhysicsServer3D.body_set_collision_mask(right_wall_body, 1)
 	interior_proxy_colliders.append(right_wall_body)
 
-	# Back wall collider - matches floor width
+	# Back wall collider - full height to match exterior
 	var back_wall_shape := PhysicsServer3D.box_shape_create()
-	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(3.0 * size_scale, 1.25 * size_scale, 0.05))
+	PhysicsServer3D.shape_set_data(back_wall_shape, Vector3(3.0 * size_scale, 1.5 * size_scale, 0.1))
 
 	var back_wall_body := PhysicsServer3D.body_create()
 	PhysicsServer3D.body_set_mode(back_wall_body, PhysicsServer3D.BODY_MODE_STATIC)
@@ -577,15 +578,8 @@ func set_docked(docked: bool, parent_container: VehicleContainer = null) -> void
 				# Transform world position to container local space (preserve current position)
 				var relative_transform = container_transform.inverse() * world_transform
 
-				# Safety check: Clamp Y position to prevent spawning below floor
-				# Container floor is at y = -1.4 * size_scale (for small container: -21)
-				# Ensure ship spawns at least 3 units above floor
-				var container_size_scale = 3.0 * container.size_multiplier
-				var floor_y = -1.4 * container_size_scale
-				var min_y = floor_y + 3.0  # 3 units above floor minimum
-
-				if relative_transform.origin.y < min_y:
-					relative_transform.origin.y = min_y
+				# UNIVERSAL: No position clamping - rely entirely on hysteresis system
+				# Hysteresis (position + velocity checks) prevents unwanted transitions
 
 				# CRITICAL: Set transform and velocities BEFORE adding to space
 				# This prevents spawning at (0,0,0) inside floor collider
@@ -596,21 +590,15 @@ func set_docked(docked: bool, parent_container: VehicleContainer = null) -> void
 				var world_velocity = exterior_body.linear_velocity
 				var local_velocity = container_transform.basis.inverse() * world_velocity
 
-				# Moderate clamping to prevent extreme velocities
-				var clamped_velocity = Vector3(
-					clamp(local_velocity.x, -15.0, 15.0),
-					clamp(local_velocity.y, -8.0, 8.0),
-					clamp(local_velocity.z, -15.0, 15.0)
-				)
-				# Light damping (keep 70% of velocity)
-				clamped_velocity *= 0.7
+				# Light damping (keep 70% of velocity) for smooth transition - no clamping
+				var damped_velocity = local_velocity * 0.7
 
 				# CRITICAL: Wake up the body BEFORE setting velocities
 				# Otherwise physics engine might ignore velocity on a sleeping body
 				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_SLEEPING, false)
 
 				# Set velocities
-				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, clamped_velocity)
+				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, damped_velocity)
 
 				# Preserve angular velocity with light damping for stability
 				var world_angvel = exterior_body.angular_velocity
@@ -636,7 +624,7 @@ func set_docked(docked: bool, parent_container: VehicleContainer = null) -> void
 
 				# CRITICAL: State might be reset when adding to space - set it AGAIN after adding
 				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM, relative_transform)
-				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, clamped_velocity)
+				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, damped_velocity)
 				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, local_angvel * 0.7)
 				PhysicsServer3D.body_set_state(dock_proxy_body, PhysicsServer3D.BODY_STATE_SLEEPING, false)
 

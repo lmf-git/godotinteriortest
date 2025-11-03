@@ -19,10 +19,11 @@ func _ready() -> void:
 	PhysicsServer3D.space_set_active(proxy_interior_space, true)
 
 	# Create gravity area for proxy interior space
+	# UNIVERSAL: Match world gravity (9.81) for consistency across all spaces
 	# This provides gravity for docked ships and character
 	proxy_gravity_area = PhysicsServer3D.area_create()
 	PhysicsServer3D.area_set_space(proxy_gravity_area, proxy_interior_space)
-	PhysicsServer3D.area_set_param(proxy_gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY, 9.8)
+	PhysicsServer3D.area_set_param(proxy_gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY, 9.81)
 	PhysicsServer3D.area_set_param(proxy_gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY_VECTOR, Vector3(0, -1, 0))
 	PhysicsServer3D.area_set_param(proxy_gravity_area, PhysicsServer3D.AREA_PARAM_GRAVITY_IS_POINT, false)
 	# Make the gravity area very large so it covers the entire proxy space

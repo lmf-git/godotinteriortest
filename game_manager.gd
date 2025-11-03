@@ -1303,6 +1303,11 @@ func _check_transitions() -> void:
 					var ship_dock_transform = PhysicsServer3D.body_get_state(vehicle.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
 					var container_velocity = ship_dock_transform.basis * proxy_velocity
 
+					print("[SHIP EXIT DEBUG] Entering container: ", target_container.name)
+					print("[SHIP EXIT DEBUG] Container is_docked: ", target_container.is_docked)
+					print("[SHIP EXIT DEBUG] Ship dock_proxy_body space: ", PhysicsServer3D.body_get_space(vehicle.dock_proxy_body))
+					print("[SHIP EXIT DEBUG] Target container interior space: ", target_container.get_interior_space())
+					print("[SHIP EXIT DEBUG] Container proxy position: ", container_proxy_pos)
 
 					# CRITICAL: Adjust camera orientation for ship->container transition
 					# Camera should track the container player is actually in, not outermost

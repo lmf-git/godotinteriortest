@@ -895,12 +895,11 @@ func _update_proxy_character_visuals() -> void:
 					# Combined transform: ship in outermost container = container_transform * ship_transform
 					var combined_transform = container_dock_transform * ship_dock_transform
 
-					station_vehicle_visual.position = combined_transform.origin
-					station_vehicle_visual.transform.basis = combined_transform.basis
+					# Set the full combined transform at once (not piecemeal)
+					station_vehicle_visual.transform = combined_transform
 				else:
 					# Ship is in a non-docked container - use direct transform
-					station_vehicle_visual.position = ship_dock_transform.origin
-					station_vehicle_visual.transform.basis = ship_dock_transform.basis
+					station_vehicle_visual.transform = ship_dock_transform
 
 		# Update docked container visual in station interior viewport
 		var station_container_visual = dock_interior_viewport.get_node_or_null("StationProxyInteriorVisuals/ContainerProxyVisual")

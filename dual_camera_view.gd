@@ -819,8 +819,34 @@ func _update_proxy_character_visuals() -> void:
 			station_char_visual.visible = show_character
 
 			if character.is_in_container:
-				# Character is directly in container - use proxy position directly
-				station_char_visual.position = proxy_pos
+				# Character is directly in container
+				# CRITICAL: Check if this container is itself docked in another container
+				# If nested, transform position from child container space to parent container space
+
+				# Find which container the player is in by checking all containers
+				var player_space = PhysicsServer3D.body_get_space(character.proxy_body)
+				var player_container: VehicleContainer = null
+				var game_manager = get_parent()
+				if game_manager:
+					for child in game_manager.get_children():
+						if child is VehicleContainer:
+							var container = child as VehicleContainer
+							if container.get_interior_space() == player_space:
+								player_container = container
+								break
+
+				# Check if we found a container and if it's docked
+				if player_container and player_container.is_docked and player_container.dock_proxy_body.is_valid():
+					# Container is docked - transform from child container space to parent container space
+					var container_dock_transform: Transform3D = PhysicsServer3D.body_get_state(player_container.dock_proxy_body, PhysicsServer3D.BODY_STATE_TRANSFORM)
+
+					# Transform character position through container's dock transform
+					var char_in_parent = container_dock_transform.origin + container_dock_transform.basis * proxy_pos
+
+					station_char_visual.position = char_in_parent
+				else:
+					# Container is not docked - use proxy position directly
+					station_char_visual.position = proxy_pos
 			elif character.is_in_vehicle and is_instance_valid(vehicle) and vehicle.is_docked:
 				# Character is in docked vehicle - transform from ship space to container space
 				# CRITICAL: Use physics space transforms, not world transforms

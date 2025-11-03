@@ -1,3 +1,4 @@
 res://vehicle.gd
 res://vehicle_container.gd
 res://game_manager.gd
+res://dual_camera_view.gd
